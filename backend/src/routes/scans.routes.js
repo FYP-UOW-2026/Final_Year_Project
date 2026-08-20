@@ -14,9 +14,8 @@
 import { Router } from "express";
 import { z } from "zod";
 
-import { db } from "../config/firebase.js";
 import { env } from "../config/env.js";
-import { COLLECTIONS, SCAN_TYPES, SEVERITIES, TIERS } from "../constants/index.js";
+import { SCAN_TYPES, SEVERITIES, TIERS } from "../constants/index.js";
 import { denyAdmin, loadProfile, requireAuth, requirePremium } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import * as gemini from "../services/gemini.service.js";
@@ -144,8 +143,7 @@ router.post(
       throw ApiError.forbidden("You can only generate explanations for your own scans.");
     }
 
-    const findings = scan.findings ?? [];
-    const finding = findings[req.params.findingIndex];
+    const finding = (scan.findings ?? [])[req.params.findingIndex];
     if (!finding) throw ApiError.notFound("That finding does not exist in this scan.");
 
     // Reuse a stored explanation rather than paying for the same call twice. Deliberately
@@ -173,15 +171,14 @@ router.post(
       throw error;
     }
 
-    findings[req.params.findingIndex] = {
-      ...finding,
-      explanation: result.explanation,
-      mitigation: result.mitigation,
-      references: result.references,
-    };
-    await db.collection(COLLECTIONS.SCANS).doc(scan.id).update({ findings });
+    const saved = await scansService.saveFindingExplanation(
+      scan.id,
+      req.user,
+      req.params.findingIndex,
+      result
+    );
 
-    res.json({ ...result, cached: false, quota });
+    res.json({ ...saved, model: result.model, cached: false, quota });
   })
 );
 
@@ -243,6 +240,15 @@ router.get(
 
     res.type("html");
     if (req.query.download) {
+      // Best-effort: a failed save never blocks the export the user actually asked for.
+      scansService
+        .saveReportExport(scan.id, req.user, {
+          format: "html",
+          fileName: `bioaudit-${scan.id}.html`,
+          html,
+        })
+        .catch((error) => console.error(`saveReportExport failed for ${scan.id}:`, error.message));
+
       res.setHeader("Content-Disposition", `attachment; filename="bioaudit-${scan.id}.html"`);
     }
     res.send(html);
