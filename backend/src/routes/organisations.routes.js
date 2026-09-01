@@ -114,10 +114,10 @@ router.get(
 /**
  * GET /api/organisations/:orgId/members/:uid/scans -- View member data (their scans)
  *
- * This is a privacy-sensitive read, so it is recorded. Findings are deliberately not
- * included: an admin can see that a member ran a scan and how many problems it found,
- * which is what oversight needs, without reading the evidence taken from the member's
- * own app.
+ * A privacy-sensitive read, so it is recorded. The response carries summaries only, to
+ * keep it small when a member has a long history. To read the findings of one run an
+ * admin opens GET /api/scans/:scanId, which authorises the same organisation and records
+ * that read too.
  */
 router.get(
   "/:orgId/members/:uid/scans",
@@ -142,7 +142,10 @@ router.get(
       metadata: { scanCount: scans.length },
     });
 
-    res.json({ scans, note: "Finding details are not included in an admin view." });
+    res.json({
+      scans,
+      note: "Summaries only. Open a single run to read its findings.",
+    });
   })
 );
 
