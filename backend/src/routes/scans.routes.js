@@ -19,6 +19,7 @@ import { env } from "../config/env.js";
 import { COLLECTIONS, SCAN_TYPES, SEVERITIES, TIERS } from "../constants/index.js";
 import { denyAdmin, loadProfile, requireAuth, requirePremium } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
+import * as audit from "../services/audit.service.js";
 import * as gemini from "../services/gemini.service.js";
 import * as scansService from "../services/scans.service.js";
 import * as usersService from "../services/users.service.js";
@@ -109,12 +110,30 @@ router.get(
   })
 );
 
-/** GET /api/scans/:scanId -- one scan with all of its findings */
+/**
+ * GET /api/scans/:scanId -- one scan with all of its findings
+ *
+ * Readable by the owner, and by an admin of the same organisation as part of the
+ * oversight the member consented to when they joined. An admin reading someone
+ * else's findings is recorded, because oversight that leaves no trace is not
+ * oversight the member can later inspect.
+ */
 router.get(
   "/:scanId",
   validate({ params: z.object({ scanId: z.string().min(1) }) }),
   asyncHandler(async (req, res) => {
     const scan = await scansService.getScanForCaller(req.params.scanId, req.user);
+
+    if (scan.userId !== req.user.uid) {
+      await audit.record({
+        action: audit.AUDIT_ACTIONS.MEMBER_DATA_VIEWED,
+        actorId: req.user.uid,
+        subjectId: scan.userId,
+        organisationId: scan.organisationId,
+        metadata: { scanId: scan.id, findingCount: (scan.findings ?? []).length },
+      });
+    }
+
     res.json({ scan });
   })
 );
