@@ -272,10 +272,8 @@ def run(cfg: Config | None = None) -> int:
             self._scan_tab_index = tabs.addTab(self._build_scan_tab(), "Scan an APK")
             self._assess_tab_index = tabs.addTab(self._build_assess_tab(), "Assess a device")
             tabs.addTab(self._build_history_tab(), "History")
-            # Always present, but it explains itself instead of showing empty tables when
-            # the signed-in account is not an organisation admin.
             self.team_tab = team.make_team_tab(self, self.palette_colours)
-            tabs.addTab(self.team_tab, "Team")
+            self._team_tab_index = tabs.addTab(self.team_tab, "Team")
             self.tabs = tabs
             self.setCentralWidget(tabs)
 
@@ -424,6 +422,7 @@ def run(cfg: Config | None = None) -> int:
                 "Compare two saved runs to see what was fixed and what is new."
                 if signed_in and account.is_premium
                 else "Comparing runs is part of the premium plan.")
+            self._update_save_report_buttons()
 
             # An admin account is an oversight role: it supervises a team's assessments
             # rather than running its own, and the server refuses a scan from one. Hiding
@@ -437,10 +436,42 @@ def run(cfg: Config | None = None) -> int:
             ):
                 self.tabs.setCurrentIndex(self._assess_tab_index + 1)   # History
 
+            # Team tools only make sense for an organisation admin -- hide the tab itself
+            # for everyone else rather than showing it with a "not an admin" placeholder.
+            team_visible = signed_in and account.is_admin and bool(account.organisation_id)
+            self.tabs.setTabVisible(self._team_tab_index, team_visible)
+            if not team_visible and self.tabs.currentIndex() == self._team_tab_index:
+                self.tabs.setCurrentIndex(self._scan_tab_index)
+
             self.team_tab.refresh_visibility()
             # The History tab has nothing of its own to poll on a timer, so any moment
             # the signed-in account might have changed is also a moment to refresh it.
             self._reload_history()
+
+        def _update_save_report_buttons(self) -> None:
+            """Single place the three "Save report from account" buttons get their state.
+
+            Enabled whenever there is a scan to save, regardless of plan -- a non-premium
+            click is caught inside the handlers (_save_server_report / _save_history_report)
+            with an upgrade prompt, rather than left as a disabled control someone has to
+            guess the reason for. Called whenever the account might have changed
+            (_refresh_account_ui) and whenever the History selection changes
+            (_show_history_run), not just right after a job finishes -- otherwise a run
+            saved while signed out stays showing a save button with nothing behind it.
+            """
+            premium = bool(self.api and self.api.account and self.api.account.is_premium)
+            tooltip = (
+                "Download this run's report from your account. Part of the premium plan."
+                if premium else
+                "Saving a report from your account is part of the premium plan.")
+
+            for btn in (self.scan_save_report_btn, self.assess_save_report_btn):
+                btn.setEnabled(bool(self.api) and bool(self._last_scan_id))
+                btn.setToolTip(tooltip)
+
+            history_ok = 0 <= self.history_combo.currentIndex() < len(self._history_ids)
+            self.history_save_report_btn.setEnabled(bool(self.api) and history_ok)
+            self.history_save_report_btn.setToolTip(tooltip)
 
         def _sign_in(self) -> None:
             from .signin import show_signin_dialog
@@ -632,9 +663,7 @@ def run(cfg: Config | None = None) -> int:
 
             ctx["sync"] = sync_result
             self._last_scan_id = sync_result.get("scan_id")
-            premium = bool(self.api and self.api.account and self.api.account.is_premium)
-            for save_btn in (self.scan_save_report_btn, self.assess_save_report_btn):
-                save_btn.setEnabled(bool(self._last_scan_id) and premium)
+            self._update_save_report_buttons()
 
             html = _sync_banner_html(sync_result) + generator.render_html(ctx["run"])
             ctx["results_view"].setHtml(html)
@@ -1095,11 +1124,15 @@ def run(cfg: Config | None = None) -> int:
             self.compare_btn = QPushButton("Compare two runs…")
             self.compare_btn.setEnabled(False)
             self.compare_btn.clicked.connect(self._compare_runs)
+            self.history_save_report_btn = QPushButton("Save report from account")
+            self.history_save_report_btn.setEnabled(False)
+            self.history_save_report_btn.clicked.connect(self._save_history_report)
             self.delete_run_btn = QPushButton("Delete this run")
             self.delete_run_btn.clicked.connect(self._delete_history_run)
             self.clear_history_btn = QPushButton("Clear all history")
             self.clear_history_btn.clicked.connect(self._clear_history)
             actions.addWidget(self.compare_btn)
+            actions.addWidget(self.history_save_report_btn)
             actions.addStretch(1)
             actions.addWidget(self.delete_run_btn)
             actions.addWidget(self.clear_history_btn)
@@ -1167,6 +1200,7 @@ def run(cfg: Config | None = None) -> int:
                     theme.empty_state_html("No runs yet", lines, self.palette_colours))
 
         def _show_history_run(self, index: int) -> None:
+            self._update_save_report_buttons()
             if self.api is None or index < 0 or index >= len(self._history_ids):
                 return
             try:
@@ -1476,9 +1510,7 @@ def run(cfg: Config | None = None) -> int:
             sync = ctx.get("sync") or {}
             # The server-backed actions only make sense once the run exists there.
             self._last_scan_id = sync.get("scan_id")
-            premium = bool(self.api and self.api.account and self.api.account.is_premium)
-            for save_btn in (self.scan_save_report_btn, self.assess_save_report_btn):
-                save_btn.setEnabled(bool(self._last_scan_id) and premium)
+            self._update_save_report_buttons()
 
             # If AI explanations are about to be requested, hold the report back until
             # they arrive (or give up) instead of showing it once and then changing it
@@ -1646,9 +1678,26 @@ def run(cfg: Config | None = None) -> int:
             self._explain_thread = None
             self._explain_worker = None
 
+        def _prompt_premium_upgrade(self) -> bool:
+            """Offer to upgrade on the spot. Returns True if the caller should proceed.
+
+            Used by the save-report handlers, which stay clickable on a free account
+            (see _update_save_report_buttons) rather than just disabled, so the reason
+            and the fix are in the same dialog instead of a tooltip someone has to find.
+            _upgrade() has its own Yes/No confirmation, so this does not ask twice.
+            """
+            QMessageBox.information(
+                self, "Premium feature",
+                "Saving a report from your account is part of the premium plan.")
+            self._upgrade()
+            return bool(self.api and self.api.account and self.api.account.is_premium)
+
         def _save_server_report(self) -> None:
             """Premium. Download the report the server holds for the last saved run."""
             if self.api is None or not self._last_scan_id:
+                return
+            premium = bool(self.api.account and self.api.account.is_premium)
+            if not premium and not self._prompt_premium_upgrade():
                 return
             path, _ = QFileDialog.getSaveFileName(
                 self, "Save report", f"bioaudit-{self._last_scan_id}.html",
@@ -1658,6 +1707,40 @@ def run(cfg: Config | None = None) -> int:
             try:
                 self.setCursor(Qt.WaitCursor)
                 html = self.api.export_report(self._last_scan_id)
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(html)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(self, "Could not save the report", str(exc))
+                return
+            finally:
+                self.setCursor(Qt.ArrowCursor)
+            self.statusBar().showMessage(f"Report saved to {path}")
+            if QMessageBox.question(self, "Report saved",
+                                    "Open it now?") == QMessageBox.Yes:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(path)))
+
+        def _save_history_report(self) -> None:
+            """Premium. Download the report for whichever run is selected in History.
+
+            Separate from _save_server_report because that one is scoped to the run just
+            finished this session (self._last_scan_id); this one saves an older run picked
+            from the account's history instead.
+            """
+            index = self.history_combo.currentIndex()
+            if self.api is None or not (0 <= index < len(self._history_ids)):
+                return
+            premium = bool(self.api.account and self.api.account.is_premium)
+            if not premium and not self._prompt_premium_upgrade():
+                return
+            scan_id = self._history_ids[index]
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save report", f"bioaudit-{scan_id}.html",
+                "Web page (*.html);;All files (*)")
+            if not path:
+                return
+            try:
+                self.setCursor(Qt.WaitCursor)
+                html = self.api.export_report(scan_id)
                 with open(path, "w", encoding="utf-8") as fh:
                     fh.write(html)
             except Exception as exc:  # noqa: BLE001

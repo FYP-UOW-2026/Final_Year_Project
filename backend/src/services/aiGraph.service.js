@@ -1,10 +1,11 @@
 /**
- * LangGraph orchestration for the AI explanation layer -- standalone build.
+ * LangGraph orchestration for the AI explanation layer.
  *
- * NOT WIRED IN. Nothing in this file is imported anywhere else in the app yet, and this
- * file itself has no exports (see bottom). It exists to be exercised by the local
- * verification script only, until a human reviews it and decides to wire it up. Do not
- * import this file from a route or another service without that confirmation.
+ * Wired in: `createSession(...).explain(...)` is called from the finding-explain routes in
+ * scans.routes.js and reports.routes.js, replacing the old single-shot gemini.service.js
+ * call at those two sites. gemini.service.js itself is left in the tree, unused, as a
+ * fallback -- nothing imports it anymore. The synthesize/compare/report modes below have no
+ * route wired to them yet.
  *
  * Three rules carried over unchanged from gemini.service.js, which this file does not
  * modify and continues to run in production:
