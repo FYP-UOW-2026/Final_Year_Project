@@ -21,10 +21,65 @@ from __future__ import annotations
 from typing import Optional
 
 from ..api import ApiClient, ApiClientError
+from .theme import SEVERITY_COLOURS
 
 # The Status cell's text for a blocked account. Named because it is both written into
 # the table and read back out of it to decide which way the suspend button acts.
 _SUSPENDED = "suspended"
+
+
+def _run_labels(scans: list[dict]) -> list[str]:
+    """One selectable label per run. Shared so the pick lists cannot drift apart."""
+    labels = []
+    for s in scans:
+        target = s.get("target") or {}
+        name = target.get("packageName") or target.get("apkFileName") or "unknown"
+        labels.append(f"{str(s.get('createdAt', ''))[:19]}  {name}")
+    return labels
+
+
+def _findings_html(findings: list[dict], palette: dict) -> str:
+    """Render a member's findings read-only, in the same shape as the owner's report.
+
+    Deliberately plain: an admin is reviewing evidence, so severity, confidence and the
+    raw evidence string matter more than presentation, and nothing here offers an edit.
+    """
+    import html as _html
+
+    order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+    ranked = sorted(findings, key=lambda f: order.get(str(f.get("severity", "")).lower(), 9))
+
+    parts = [f"<div style='font-family:\"Segoe UI\",Arial,sans-serif;color:{palette['text']}'>"]
+    for f in ranked:
+        sev = str(f.get("severity", "info")).lower()
+        colour = SEVERITY_COLOURS.get(sev, SEVERITY_COLOURS["info"])
+        owasp = ", ".join(f.get("owasp") or []) or "not mapped"
+        parts.append(
+            f"<p style='margin:14px 0 2px'>"
+            f"<span style='background:{colour};color:#fff;padding:1px 7px;"
+            f"border-radius:3px;font-size:11px'>{_html.escape(sev.capitalize())}</span>"
+            f"&nbsp;<b>{_html.escape(str(f.get('title', 'Finding')))}</b>"
+            f"&nbsp;<span style='color:{palette['muted']};font-size:11px'>"
+            f"{_html.escape(owasp)} &middot; {_html.escape(str(f.get('confidence', '')))}"
+            f"</span></p>"
+        )
+        if f.get("component"):
+            parts.append(
+                f"<p style='margin:0 0 2px;color:{palette['muted']};font-size:12px'>"
+                f"Component: {_html.escape(str(f['component']))}</p>")
+        parts.append(
+            f"<p style='margin:0 0 2px;font-size:12px'><i>Evidence:</i> "
+            f"{_html.escape(str(f.get('evidence', '')))}</p>")
+        if f.get("mitigation"):
+            parts.append(
+                f"<p style='margin:0 0 2px;font-size:12px'><i>Fix:</i> "
+                f"{_html.escape(str(f['mitigation']))}</p>")
+        if f.get("explanation"):
+            parts.append(
+                f"<p style='margin:0 0 2px;font-size:12px;color:{palette['muted']}'>"
+                f"{_html.escape(str(f['explanation']))}</p>")
+    parts.append("</div>")
+    return "".join(parts)
 
 
 def make_team_tab(parent_window, palette: dict):
@@ -266,10 +321,9 @@ def make_team_tab(parent_window, palette: dict):
             dl = QVBoxLayout(dialog)
             heading = QLabel(
                 f"<b>{len(scans)} run(s)</b><br>"
-                f"<span style='color:{palette['muted']}'>Findings are not shown. An admin can "
-                f"see that a scan happened and how many problems it found, but not the evidence "
-                f"taken from the member's own app. This view is recorded in the activity log."
-                f"</span>")
+                f"<span style='color:{palette['muted']}'>This list shows summaries. Open a run "
+                f"to read its findings. Both the list and each run you open are recorded in the "
+                f"activity log, and findings cannot be edited from here.</span>")
             heading.setTextFormat(Qt.RichText)
             heading.setWordWrap(True)
             dl.addWidget(heading)
@@ -280,6 +334,9 @@ def make_team_tab(parent_window, palette: dict):
             dl.addWidget(body, 1)
 
             flag_row = QHBoxLayout()
+            open_btn = QPushButton("Open a run…")
+            open_btn.clicked.connect(lambda: self._view_member_findings(scans))
+            flag_row.addWidget(open_btn)
             flag_btn = QPushButton("Flag one of these runs…")
             flag_btn.clicked.connect(lambda: self._flag_run(scans, dialog))
             flag_row.addWidget(flag_btn)
@@ -291,14 +348,65 @@ def make_team_tab(parent_window, palette: dict):
             dialog.exec()
             self._load_audit()
 
+        def _view_member_findings(self, scans: list[dict]) -> None:
+            """Open one of a member's runs and show its findings.
+
+            The summary list carries no findings, so the chosen run is fetched on its own.
+            The server authorises this for an admin of the same organisation and records
+            the read, which is why nothing here needs to re-check the caller's role.
+            """
+            choice, ok = QInputDialog.getItem(
+                self, "Open a run", "Which run?", _run_labels(scans), 0, False)
+            if not ok:
+                return
+            scan = scans[_run_labels(scans).index(choice)]
+
+            try:
+                self._busy(True)
+                full = self.client.get_scan(scan["id"])
+            except ApiClientError as exc:
+                return self._fail("Could not open that run", exc)
+            finally:
+                self._busy(False)
+
+            findings = full.get("findings") or []
+            target = (full.get("target") or {})
+            label = target.get("packageName") or target.get("apkFileName") or "unknown"
+
+            if not findings:
+                QMessageBox.information(
+                    self, "No findings", f"That run of {label} recorded no findings.")
+                return
+
+            dialog = QDialog(self)
+            dialog.setWindowTitle(f"Findings - {label}")
+            dialog.setMinimumSize(760, 560)
+            dl = QVBoxLayout(dialog)
+            note = QLabel(
+                f"<b>{label}</b> &nbsp; {str(full.get('createdAt', ''))[:19]}<br>"
+                f"<span style='color:{palette['muted']}'>Read-only. Opening this run has been "
+                f"recorded in the activity log.</span>")
+            note.setTextFormat(Qt.RichText)
+            note.setWordWrap(True)
+            dl.addWidget(note)
+
+            body = QTextEdit()
+            body.setReadOnly(True)
+            body.setHtml(_findings_html(findings, palette))
+            dl.addWidget(body, 1)
+
+            row = QHBoxLayout()
+            row.addStretch(1)
+            close = QPushButton("Close")
+            close.clicked.connect(dialog.accept)
+            row.addWidget(close)
+            dl.addLayout(row)
+            dialog.exec()
+            self._load_audit()
+
         def _flag_run(self, scans: list[dict], owner_dialog) -> None:
             """Raise a flag on a member's run, with a reason."""
-            labels = []
-            for s in scans:
-                target = (s.get("target") or {})
-                label = target.get("packageName") or target.get("apkFileName") or "unknown"
-                labels.append(f"{str(s.get('createdAt', ''))[:19]}  {label}")
-
+            labels = _run_labels(scans)
             choice, ok = QInputDialog.getItem(
                 self, "Flag a run", "Which run?", labels, 0, False)
             if not ok:

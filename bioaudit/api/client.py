@@ -471,9 +471,10 @@ class ApiClient:
     def member_scans(self, org_id: str, uid: str, limit: int = 50) -> list[dict]:
         """Admin. Scan summaries for one member.
 
-        Findings are not included. An admin can see that a scan happened and how many
-        problems it found, but not the evidence taken from the member's own app, and the
-        server records this read in its audit log.
+        Summaries only, so a member with a long history does not produce a huge response.
+        Call `get_scan` with one of these ids to read that run's findings; the server
+        allows it for an admin of the same organisation and records both reads in the
+        audit log.
         """
         return self._request(
             "GET", f"/organisations/{org_id}/members/{uid}/scans?limit={int(limit)}"
