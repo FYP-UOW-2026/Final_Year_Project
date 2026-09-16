@@ -1,0 +1,40 @@
+# Render Blueprint -- mirrors the actual service settings already configured
+# by hand in the Render dashboard for bioaudit-backend
+# (https://final-year-project-8saa.onrender.com).
+#
+# This is real, usable config: committing it and connecting the repo as a
+# Blueprint in Render lets the service be recreated from scratch (new
+# region, disaster recovery, a teammate's own Render account) without
+# re-clicking through the dashboard. It does not replace the auto-deploy
+# already working (push to main -> Render rebuilds) -- that keeps working
+# whether or not this file exists.
+#
+# Secrets (sync: false) are never stored here -- set them once in the
+# Render dashboard after the Blueprint creates the service.
+
+services:
+  - type: web
+    name: bioaudit-backend
+    runtime: node
+    rootDir: backend
+    plan: free
+    branch: main
+    autoDeploy: true
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CORS_ORIGINS
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false
+      - key: FIREBASE_WEB_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false

@@ -23,5 +23,8 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Thesis screenshot generator + output (personal aid, not part of the product)
+thesis_screenshots/
+
 
 CLAUDE.md
