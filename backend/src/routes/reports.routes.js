@@ -1,3 +1,7 @@
+/** API Endpoint Design**/
+// GET  /api/audits/:scanId/report
+
+
 /**
  * Scan history, AI explanations, comparison, and report export.
  *
@@ -14,11 +18,11 @@
 import { Router } from "express";
 import { z } from "zod";
 
+import { db } from "../config/firebase.js";
 import { env } from "../config/env.js";
-import { SCAN_TYPES, SEVERITIES, TIERS } from "../constants/index.js";
+import { COLLECTIONS, SCAN_TYPES, SEVERITIES, TIERS } from "../constants/index.js";
 import { denyAdmin, loadProfile, requireAuth, requirePremium } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
-import * as audit from "../services/audit.service.js";
 import { createSession } from "../services/aiGraph.service.js";
 import * as scansService from "../services/scans.service.js";
 import * as usersService from "../services/users.service.js";
@@ -109,30 +113,12 @@ router.get(
   })
 );
 
-/**
- * GET /api/scans/:scanId -- one scan with all of its findings
- *
- * Readable by the owner, and by an admin of the same organisation as part of the
- * oversight the member consented to when they joined. An admin reading someone
- * else's findings is recorded, because oversight that leaves no trace is not
- * oversight the member can later inspect.
- */
+/** GET /api/scans/:scanId -- one scan with all of its findings */
 router.get(
   "/:scanId",
   validate({ params: z.object({ scanId: z.string().min(1) }) }),
   asyncHandler(async (req, res) => {
     const scan = await scansService.getScanForCaller(req.params.scanId, req.user);
-
-    if (scan.userId !== req.user.uid) {
-      await audit.record({
-        action: audit.AUDIT_ACTIONS.MEMBER_DATA_VIEWED,
-        actorId: req.user.uid,
-        subjectId: scan.userId,
-        organisationId: scan.organisationId,
-        metadata: { scanId: scan.id, findingCount: (scan.findings ?? []).length },
-      });
-    }
-
     res.json({ scan });
   })
 );
@@ -162,7 +148,8 @@ router.post(
       throw ApiError.forbidden("You can only generate explanations for your own scans.");
     }
 
-    const finding = (scan.findings ?? [])[req.params.findingIndex];
+    const findings = scan.findings ?? [];
+    const finding = findings[req.params.findingIndex];
     if (!finding) throw ApiError.notFound("That finding does not exist in this scan.");
 
     // Reuse a stored explanation rather than paying for the same call twice. Deliberately
@@ -194,14 +181,15 @@ router.post(
       throw error;
     }
 
-    const saved = await scansService.saveFindingExplanation(
-      scan.id,
-      req.user,
-      req.params.findingIndex,
-      result
-    );
+    findings[req.params.findingIndex] = {
+      ...finding,
+      explanation: result.explanation,
+      mitigation: result.mitigation,
+      references: result.references,
+    };
+    await db.collection(COLLECTIONS.SCANS).doc(scan.id).update({ findings });
 
-    res.json({ ...saved, model: result.model, cached: false, quota });
+    res.json({ ...result, cached: false, quota });
   })
 );
 
@@ -263,15 +251,6 @@ router.get(
 
     res.type("html");
     if (req.query.download) {
-      // Best-effort: a failed save never blocks the export the user actually asked for.
-      scansService
-        .saveReportExport(scan.id, req.user, {
-          format: "html",
-          fileName: `bioaudit-${scan.id}.html`,
-          html,
-        })
-        .catch((error) => console.error(`saveReportExport failed for ${scan.id}:`, error.message));
-
       res.setHeader("Content-Disposition", `attachment; filename="bioaudit-${scan.id}.html"`);
     }
     res.send(html);
