@@ -63,6 +63,7 @@ class Finding:
     source: str                         # which detector produced it, e.g. "ipc_oracle"
     confidence: str = "confirmed"       # "confirmed" | "likely" (APK static analysis)
     component: Optional[str] = None     # affected component/screen if applicable
+    attack_path: list[str] = field(default_factory=list)  # ordered steps: pre-auth -> attempt -> result
 
     # Filled in by the engine + AI layer (never by detectors).
     explanation: Optional[str] = None   # plain-language, AI-generated
@@ -86,6 +87,11 @@ class TestRun:
     package: str
     mode: TestMode = TestMode.SELECT_APP
     device_serial: Optional[str] = None
+    device_model: Optional[str] = None
+    app_version: Optional[str] = None
+    android_version: Optional[str] = None
+    login_state: str = "Not authenticated (pre-auth probing only)"
+    tests_performed: list[str] = field(default_factory=list)
     started_at: float = field(default_factory=time.time)
     finished_at: Optional[float] = None
     findings: list[Finding] = field(default_factory=list)
@@ -110,6 +116,11 @@ class TestRun:
             "package": self.package,
             "mode": self.mode.name,
             "device_serial": self.device_serial,
+            "device_model": self.device_model,
+            "app_version": self.app_version,
+            "android_version": self.android_version,
+            "login_state": self.login_state,
+            "tests_performed": self.tests_performed,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "counts": self.counts(),

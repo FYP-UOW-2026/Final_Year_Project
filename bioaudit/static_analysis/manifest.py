@@ -27,6 +27,7 @@ class ManifestInfo:
     package: str
     debuggable: bool = False
     allow_backup: bool = True       # Android default is true when unset
+    version_name: Optional[str] = None
     components: list[Component] = field(default_factory=list)
 
     def exported(self) -> list[Component]:
@@ -72,6 +73,7 @@ def parse_apk(apk_path: str) -> ManifestInfo:
         package=package,
         debuggable=bool(apk.get_attribute_value("application", "debuggable")),
         allow_backup=_attr_bool(apk.get_attribute_value("application", "allowBackup"), default=True),
+        version_name=apk.get_androidversion_name(),
     )
 
     for kind in ("activity", "service", "receiver", "provider"):

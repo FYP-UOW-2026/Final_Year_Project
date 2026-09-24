@@ -52,3 +52,22 @@ export function redactFinding(finding) {
     component: finding.component ? redact(finding.component) : finding.component,
   };
 }
+
+/**
+ * Redact the free-text fields of scan scope metadata before it ever reaches an AI prompt.
+ *
+ * deviceSerial is deliberately never accepted here or passed into any AI-bound shape: it's
+ * a unique identifier, not prose these patterns can meaningfully sanitize.
+ */
+export function redactScope(scope) {
+  if (!scope) return scope;
+  return {
+    deviceModel: scope.deviceModel ? redact(scope.deviceModel) : scope.deviceModel,
+    appVersion: scope.appVersion ? redact(scope.appVersion) : scope.appVersion,
+    androidVersion: scope.androidVersion ? redact(scope.androidVersion) : scope.androidVersion,
+    loginState: scope.loginState ? redact(scope.loginState) : scope.loginState,
+    testsPerformed: Array.isArray(scope.testsPerformed)
+      ? scope.testsPerformed.map(redact)
+      : scope.testsPerformed,
+  };
+}
