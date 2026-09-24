@@ -11,7 +11,7 @@
  * detector needs a new entry here, which is deliberate: it keeps the guidance a reviewed
  * artefact rather than whatever the model happens to recall.
  *
- * Kept separate from gemini.service.js so it can be revised as MASVS guidance evolves
+ * Kept separate from groq.service.js so it can be revised as MASVS guidance evolves
  * without touching the code that calls the model (see URS 4.4, maintainability).
  */
 

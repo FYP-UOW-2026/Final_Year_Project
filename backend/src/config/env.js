@@ -84,15 +84,19 @@ export const env = {
     webApiKey: required("FIREBASE_WEB_API_KEY"),
   },
 
-  gemini: {
-    apiKey: optional("GEMINI_API_KEY"),
-    // A pinned model rather than a "-latest" alias. The alias is steered by Google and
-    // can land on a pool that is overloaded, which shows up as calls hanging for a
-    // minute or more before returning 503 -- far past any sensible client timeout.
-    model: optional("GEMINI_MODEL", "gemini-3.5-flash"),
-    // Ceiling on a single attempt. Without one the SDK waits indefinitely, so an
-    // overloaded model stalls the request instead of failing and letting us retry.
-    timeoutMs: int("GEMINI_TIMEOUT_MS", 20000),
+  groq: {
+    apiKey: optional("GROQ_API_KEY"),
+    // gpt-oss-120b is one of Groq's current free-tier chat models (1,000 req/day,
+    // 30/min, no card required) and more than capable of rephrasing a finding that
+    // has already been confirmed and grounded -- this task doesn't need a frontier
+    // model. Pinned rather than left to a "latest" alias for the same reason a
+    // pinned Gemini model was used before: predictable behaviour beats whatever a
+    // provider quietly repoints an alias to.
+    model: optional("GROQ_MODEL", "openai/gpt-oss-120b"),
+    // Ceiling on a single attempt. Without one an overloaded model could leave the
+    // request open for minutes, which is worse than failing: the caller has long
+    // since given up, and the retries in groq.service.js never get their turn.
+    timeoutMs: int("GROQ_TIMEOUT_MS", 20000),
     get enabled() {
       return Boolean(this.apiKey);
     },
@@ -118,7 +122,9 @@ export const env = {
   limits: {
     freeHistory: int("FREE_HISTORY_LIMIT", 10),
     // Free-tier ceiling on AI explanations per calendar month. Premium is uncapped, so
-    // there is no matching setting for it. Reflects the running cost of the Gemini API.
+    // there is no matching setting for it. This is a BioAudit-side courtesy limit, not
+    // a mirror of Groq's own per-account quota -- the two are independent, and it is
+    // possible to exhaust either one first.
     freeAiPerMonth: int("FREE_AI_MONTHLY_LIMIT", 20),
   },
 

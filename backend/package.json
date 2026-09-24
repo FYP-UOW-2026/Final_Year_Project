@@ -27,9 +27,6 @@
     "nodemailer": "^9.0.5",
     "zod": "^3.23.8"
   },
-  "optionalDependencies": {
-    "@google/genai": "^0.14.0"
-  },
   "devDependencies": {
     "eslint": "^9.9.0"
   }

@@ -11,11 +11,19 @@
  *
  * The API key lives here on the server rather than in the desktop app, which means it
  * can be rotated centrally and is never shipped inside a downloadable binary.
+ *
+ * Runs on Groq rather than a client SDK: Groq's API is OpenAI-compatible, so a plain
+ * `fetch` against its chat-completions endpoint is enough -- no extra dependency, in
+ * keeping with the rest of the project's habit of not adding a library for a handful
+ * of calls. (This used to call Gemini; switched after its free tier proved too easy to
+ * exhaust during ordinary testing -- see the retry split below for why.)
  */
 import { env } from "../config/env.js";
 import { ApiError } from "../utils/ApiError.js";
 import { redactFinding } from "../utils/redact.js";
 import * as knowledgeBase from "./knowledgeBase.js";
+
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 const SYSTEM_PROMPT = `You explain confirmed Android security findings to app developers who are not security specialists.
 
@@ -29,31 +37,6 @@ Rules:
 
 Reply with JSON only, in this shape:
 {"explanation": "...", "mitigation": "...", "references": ["..."]}`;
-
-/** Retryable server-side conditions, as opposed to a bad request we should not repeat. */
-function isTransient(error) {
-  const text = String(error?.message || "").toLowerCase();
-  return [
-    "503", "502", "500", "429", "unavailable", "overloaded", "high demand",
-    "timeout", "aborted", "abort",   // our own per-attempt deadline firing
-  ].some((t) => text.includes(t));
-}
-
-async function loadClient() {
-  if (!env.gemini.enabled) {
-    throw ApiError.internal(
-      "The AI explanation layer is not configured. Set GEMINI_API_KEY to enable it."
-    );
-  }
-  try {
-    const { GoogleGenAI } = await import("@google/genai");
-    return new GoogleGenAI({ apiKey: env.gemini.apiKey });
-  } catch {
-    throw ApiError.internal(
-      "The Gemini SDK is not installed. Run 'npm install @google/genai' to enable explanations."
-    );
-  }
-}
 
 function buildPrompt(finding) {
   const safe = redactFinding(finding);
@@ -105,37 +88,92 @@ function parseResponse(text) {
 }
 
 /**
+ * One call to Groq's chat-completions endpoint. Throws a plain Error carrying the
+ * HTTP status on `.status` so the retry loop below can tell a rate limit apart from
+ * a genuine outage without parsing message text.
+ */
+async function callGroq(prompt, timeoutMs) {
+  let response;
+  try {
+    response = await fetch(GROQ_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.groq.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: env.groq.model,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: prompt },
+        ],
+        response_format: { type: "json_object" },
+      }),
+      // Bound the call. An overloaded model can otherwise leave the request open for
+      // minutes before answering, which is worse than failing: the caller has long
+      // since given up, and the retries below never get their turn.
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (error) {
+    // fetch itself threw: DNS failure, connection refused, or the abort signal firing.
+    const err = new Error(
+      error.name === "TimeoutError" || error.name === "AbortError"
+        ? "timed out waiting for a response"
+        : error.message
+    );
+    err.status = 0;
+    throw err;
+  }
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = body?.error?.message || `HTTP ${response.status}`;
+    const err = new Error(message);
+    err.status = response.status;
+    throw err;
+  }
+
+  const text = body?.choices?.[0]?.message?.content ?? "";
+  return parseResponse(text);
+}
+
+/**
  * Generate an explanation and a fix for one finding.
  *
- * Retries a few times with a growing delay, because a busy model returning 503 is
- * common and a single failure should not lose the user's request.
+ * A 429 is not retried: it means the account's request quota (per-minute or
+ * per-day) is already spent, and trying again a second later gets the same answer
+ * every time -- retrying it just spends three round-trips failing the same way
+ * instead of one. A 500/502/503, or the request timing out, genuinely can clear up
+ * on its own, so those get a few attempts with a growing delay.
  */
 export async function explainFinding(finding, { attempts = 3 } = {}) {
-  const client = await loadClient();
-  const prompt = buildPrompt(finding);
+  if (!env.groq.enabled) {
+    throw ApiError.internal(
+      "The AI explanation layer is not configured. Set GROQ_API_KEY to enable it."
+    );
+  }
 
-  let delay = 800;
+  const prompt = buildPrompt(finding);
+  const transientStatuses = new Set([0, 500, 502, 503, 504]);
+
+  let delay = 2000;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const response = await client.models.generateContent({
-        model: env.gemini.model,
-        contents: prompt,
-        config: {
-          systemInstruction: SYSTEM_PROMPT,
-          responseMimeType: "application/json",
-          // Bound each attempt. An overloaded model can otherwise leave the request
-          // open for minutes before answering, which is worse than failing: the caller
-          // has long since given up, and the retries below never get their turn.
-          abortSignal: AbortSignal.timeout(env.gemini.timeoutMs),
-        },
-      });
-
-      const text = response.text ?? response?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-      return { ...parseResponse(text), model: env.gemini.model };
+      return { ...(await callGroq(prompt, env.groq.timeoutMs)), model: env.groq.model };
     } catch (error) {
+      if (error instanceof ApiError) throw error;
+
+      if (error.status === 429) {
+        throw ApiError.internal(
+          "The AI service has hit its request limit for right now. Try again in a " +
+            "minute, or in a while if this keeps happening -- that usually means the " +
+            "daily limit, not just the per-minute one, has been used up."
+        );
+      }
+
+      const transient = transientStatuses.has(error.status);
       const lastAttempt = attempt === attempts;
-      if (lastAttempt || !isTransient(error)) {
-        if (error instanceof ApiError) throw error;
+      if (lastAttempt || !transient) {
         throw ApiError.internal(`The AI service is unavailable right now. ${error.message}`);
       }
       await new Promise((resolve) => setTimeout(resolve, delay));
