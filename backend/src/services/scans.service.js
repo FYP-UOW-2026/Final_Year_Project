@@ -55,6 +55,13 @@ export async function createScan(user, payload) {
       apkFileName: payload.target?.apkFileName ?? null,
       deviceSerial: payload.target?.deviceSerial ?? null,
     },
+    scope: {
+      deviceModel: payload.scope?.deviceModel ?? null,
+      appVersion: payload.scope?.appVersion ?? null,
+      androidVersion: payload.scope?.androidVersion ?? null,
+      loginState: payload.scope?.loginState ?? null,
+      testsPerformed: payload.scope?.testsPerformed ?? [],
+    },
     toolVersion: payload.toolVersion ?? null,
     authorisationConfirmed: payload.authorisationConfirmed === true,
     findings,

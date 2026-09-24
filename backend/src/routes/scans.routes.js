@@ -43,6 +43,7 @@ const findingSchema = z.object({
   explanation: z.string().max(5000).nullish(),
   mitigation: z.string().max(5000).nullish(),
   references: z.array(z.string().max(500)).max(20).default([]),
+  attack_path: z.array(z.string().max(500)).max(20).default([]),
 });
 
 /**
@@ -62,6 +63,15 @@ router.post(
           packageName: z.string().trim().max(255).nullish(),
           apkFileName: z.string().trim().max(255).nullish(),
           deviceSerial: z.string().trim().max(120).nullish(),
+        })
+        .default({}),
+      scope: z
+        .object({
+          deviceModel: z.string().trim().max(120).nullish(),
+          appVersion: z.string().trim().max(120).nullish(),
+          androidVersion: z.string().trim().max(120).nullish(),
+          loginState: z.string().trim().max(300).nullish(),
+          testsPerformed: z.array(z.string().trim().max(200)).max(50).default([]),
         })
         .default({}),
       findings: z.array(findingSchema).max(500).default([]),

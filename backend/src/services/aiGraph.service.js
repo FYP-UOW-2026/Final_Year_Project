@@ -29,7 +29,7 @@ import { z } from "zod";
 
 import { env } from "../config/env.js";
 import { ApiError } from "../utils/ApiError.js";
-import { redact, redactFinding } from "../utils/redact.js";
+import { redact, redactFinding, redactScope } from "../utils/redact.js";
 import * as knowledgeBase from "./knowledgeBase.js";
 import { getScanForCaller, compareScans } from "./scans.service.js";
 import { SEVERITIES } from "../constants/index.js";
@@ -134,9 +134,21 @@ function buildTools(state, { user, scanIds }) {
           type: scan.type,
           counts: scan.counts,
           findingCount: scan.findingCount ?? (scan.findings ?? []).length,
+          scope: scan.scope ? redactScope(scan.scope) : null,
           createdAt: scan.createdAt ?? null,
         };
-        return JSON.stringify(egressGuard(state, "get_scan_summary", value, { type: 0 }));
+        return JSON.stringify(
+          egressGuard(state, "get_scan_summary", value, {
+            type: 0,
+            "scope.": {
+              deviceModel: 0,
+              appVersion: 0,
+              androidVersion: 0,
+              loginState: 0,
+              testsPerformed: 0,
+            },
+          })
+        );
       },
     },
     {
