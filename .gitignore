@@ -22,3 +22,13 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude
+CLAUDE.md
+Claude.md
+claude.md
+
+# Extra
+BioAudit-Backend-QA.docx
+sample-vuln-app.apk.zip
+thesis_screenshots/
