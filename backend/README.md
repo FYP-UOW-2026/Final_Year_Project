@@ -17,7 +17,7 @@ everything around it:
 | Generating AI explanations | Converting an exported report to PDF |
 | Organisations, invitations, member oversight | |
 
-Two consequences worth noting. The Gemini API key lives on the server, so it is never shipped
+Two consequences worth noting. The Groq API key lives on the server, so it is never shipped
 inside a downloadable program and can be replaced centrally. And detection stays deterministic:
 the rules in the desktop app decide what a problem is, and the AI here only puts a confirmed
 finding into readable words.
@@ -26,7 +26,8 @@ finding into readable words.
 
 - Node.js 18.17 or newer
 - A Firebase project with **Firestore** and **Email/Password authentication** enabled
-- A Gemini API key, only if you want AI explanations
+- A Groq API key, only if you want AI explanations (free, no card required, from
+  console.groq.com)
 
 ## Setup
 
@@ -44,7 +45,7 @@ Filling in `.env` needs three things from the Firebase console:
    the key grants full access to your project.
 2. **Web API key.** Project settings, General, Web API Key. The Admin SDK cannot check a
    password, so sign-in calls Google's Identity Toolkit with this key.
-3. **Gemini API key**, if you want explanations. Leave it blank and the rest of the API works
+3. **Groq API key**, if you want explanations. Leave it blank and the rest of the API works
    normally, with the explain endpoint reporting that the feature is switched off.
 
 Then deploy the database rules:
@@ -300,7 +301,7 @@ backend/
       users.service.js          accounts and custom claims
       organisations.service.js  membership, invitations, flag and review
       scans.service.js          history, retention, comparison
-      gemini.service.js         AI explanations, with redaction
+      groq.service.js           AI explanations, with redaction
       report.service.js         HTML report rendering
       audit.service.js          append-only record of admin actions
     utils/

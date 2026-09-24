@@ -13,8 +13,8 @@ const app = createApp();
 
 const server = app.listen(env.port, () => {
   console.log(`BioAudit API listening on port ${env.port} in ${env.nodeEnv} mode.`);
-  if (!env.gemini.enabled) {
-    console.log("AI explanations are disabled. Set GEMINI_API_KEY to turn them on.");
+  if (!env.groq.enabled) {
+    console.log("AI explanations are disabled. Set GROQ_API_KEY to turn them on.");
   }
 });
 

@@ -223,7 +223,7 @@ not depend on whether the account exists.**
 ### Redact before anything reaches the AI
 
 `utils/redact.js` strips tokens, keys, and JWTs from finding evidence before it is sent to
-Gemini. Scan evidence comes out of someone else's app and can contain real secrets. Any new
+Groq. Scan evidence comes out of someone else's app and can contain real secrets. Any new
 path that sends user content to a third party runs through `redact()` first.
 
 ---
@@ -348,7 +348,7 @@ Add a new env var to an existing deployment without disturbing the others:
 
 ```bash
 gcloud run services update bioaudit-api --region us-central1 \
-  --update-env-vars "GEMINI_API_KEY=..."
+  --update-env-vars "GROQ_API_KEY=..."
 ```
 
 Check what you deployed:
@@ -370,9 +370,12 @@ default alone.
 
 ### AI explanations
 
-Set `GEMINI_API_KEY` and optionally `GEMINI_MODEL` (default `gemini-flash-latest`). Without
-a key the layer degrades gracefully: findings still get the deterministic fallback fixes
-from the Python engine, and `/api/health` reports `aiExplanations: disabled`.
+Set `GROQ_API_KEY` and optionally `GROQ_MODEL` (default `openai/gpt-oss-120b`, one of
+Groq's free-tier chat models). Without a key the layer degrades gracefully: findings still
+get the deterministic fallback fixes from the Python engine, and `/api/health` reports
+`aiExplanations: disabled`. Get a key at console.groq.com — no card required for the free
+tier (1,000 requests/day, 30/minute as of this writing; check the console for current
+numbers, they do change).
 
 The key belongs **only** on the server. The Python client has no AI dependency at all — a
 local explainer existed once and was removed precisely because it only worked on whichever
@@ -389,9 +392,10 @@ evolves without touching the code that calls the model.
 free account may generate per calendar month; premium is uncapped. The counter lives on the
 user document as `aiUsage: { month, count }` and is spent inside a transaction, so two
 simultaneous requests cannot both take the last one. A counter from an earlier month reads
-as zero rather than needing a scheduled reset. A failed Gemini call is refunded — the API
+as zero rather than needing a scheduled reset. A failed Groq call is refunded — the API
 fails often enough (rate limits, quota) that charging for nothing would quietly eat a free
-user's month.
+user's month. Note this counter is BioAudit's own limit and independent of Groq's own
+account-level quota — a user can exhaust either one first.
 
 ### Email
 
