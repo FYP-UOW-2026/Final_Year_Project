@@ -1,0 +1,56 @@
+# Artillery stress test for POST /api/scans/:scanId/findings/:findingIndex/explain.
+#
+# Same target and setup requirements as explain.k6.js (see that file's header for how to
+# get AUTH_TOKEN / SCAN_ID). Pick one phase block by commenting the others out, or run
+# with `--overrides` to swap phases from the CLI. `force: true` bypasses the cached
+# explanation so every request reaches the AI layer.
+#
+# Usage:
+#   BASE_URL=http://127.0.0.1:4000 AUTH_TOKEN=... SCAN_ID=... FINDING_INDEX=0 \
+#     npx artillery run tests/stress/explain.artillery.yml
+
+config:
+  target: "{{ $processEnvironment.BASE_URL || 'http://127.0.0.1:4000' }}"
+  http:
+    timeout: 60
+  plugins:
+    expect: {}
+  variables:
+    scanId: "{{ $processEnvironment.SCAN_ID }}"
+    findingIndex: "{{ $processEnvironment.FINDING_INDEX || 0 }}"
+  phases:
+    # Uncomment exactly one block. Names/durations match the plan's load table.
+    - name: smoke
+      duration: 120
+      arrivalRate: 1
+      maxVusers: 2
+    # - name: normal
+    #   duration: 600
+    #   arrivalRate: 2
+    #   maxVusers: 10
+    # - name: high
+    #   duration: 900
+    #   arrivalRate: 5
+    #   maxVusers: 25
+    # - name: stress
+    #   duration: 1200
+    #   arrivalRate: 5
+    #   rampTo: 30
+    #   maxVusers: 150
+    # - name: recovery
+    #   duration: 600
+    #   arrivalRate: 2
+    #   maxVusers: 10
+
+scenarios:
+  - name: explain finding
+    flow:
+      - post:
+          url: "/api/scans/{{ scanId }}/findings/{{ findingIndex }}/explain"
+          headers:
+            Authorization: "Bearer {{ $processEnvironment.AUTH_TOKEN }}"
+            Content-Type: "application/json"
+          json:
+            force: true
+          expect:
+            - statusCode: 200
