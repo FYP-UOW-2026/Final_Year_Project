@@ -24,7 +24,7 @@ process.env.FIREBASE_PROJECT_ID = "smoke-test-project";
 process.env.FIREBASE_CLIENT_EMAIL = "smoke@smoke-test-project.iam.gserviceaccount.com";
 process.env.FIREBASE_PRIVATE_KEY = privateKey.replace(/\n/g, "\\n");
 process.env.FIREBASE_WEB_API_KEY = "smoke-test-web-key";
-process.env.GEMINI_API_KEY = "";
+process.env.GROQ_API_KEY = "";
 process.env.FREE_HISTORY_LIMIT = "10";
 
 const { createApp } = await import("../src/app.js");

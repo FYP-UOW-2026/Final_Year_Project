@@ -70,6 +70,22 @@ export const modelRegistry = {
       contextLimit: env.gemini.contextLimit,
     },
   },
+  [`groq:${env.groq.model}`]: {
+    id: `groq:${env.groq.model}`,
+    provider: "groq",
+    model: env.groq.model,
+    enabled: env.groq.enabled,
+    priority: 2,
+    capabilities: {
+      text: true,
+      tools: true,
+      structuredOutput: true,
+      vision: false,
+      // Not exposed per-model by env config yet -- gpt-oss-120b's real window is much
+      // larger, but a conservative default is safer than overstating it.
+      contextLimit: 32000,
+    },
+  },
   ...ollamaEntries,
   ...openaiEntries,
 };
