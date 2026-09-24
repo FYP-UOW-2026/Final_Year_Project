@@ -20,7 +20,7 @@ router.get("/health", (req, res) => {
   res.json({
     status: "ok",
     environment: env.nodeEnv,
-    aiExplanations: env.gemini.enabled ? "enabled" : "disabled",
+    aiExplanations: env.groq.enabled ? "enabled" : "disabled",
     time: new Date().toISOString(),
   });
 });

@@ -2,10 +2,10 @@
  * LangGraph orchestration for the AI explanation layer.
  *
  * Wired in: `createSession(...).explain(...)` is called from the finding-explain routes in
- * scans.routes.js and reports.routes.js, replacing the old single-shot gemini.service.js
- * call at those two sites. gemini.service.js itself is left in the tree, unused, as a
- * fallback -- nothing imports it anymore. The synthesize/compare/report modes below have no
- * route wired to them yet.
+ * scans.routes.js and reports.routes.js, replacing the old single-shot gemini.service.js and
+ * groq.service.js calls at those two sites. groq.service.js is left in the tree, unused --
+ * nothing imports it anymore, Groq is reached through aiModelRouter.js's fallback chain
+ * instead. The synthesize/compare/report modes below have no route wired to them yet.
  *
  * Three rules carried over unchanged from gemini.service.js, which this file does not
  * modify and continues to run in production:
@@ -351,16 +351,18 @@ export function buildGraph({ mode, user, scanIds }) {
         const result =
           entry.provider === "gemini"
             ? await callGemini(systemPrompt, contents)
-            : entry.provider === "ollama"
-              ? await callOllamaCloud(entry, systemPrompt, contents)
-              : (() => {
-                  // Reachable only once env.openai.enabled flips true; the registry
-                  // still marks these entries enabled with no adapter behind them yet.
-                  // Fail loudly here rather than silently skipping to the next candidate.
-                  throw ApiError.internal(
-                    `OpenAI is enabled in config but no call adapter is implemented yet for ${entry.id}.`
-                  );
-                })();
+            : entry.provider === "groq"
+              ? await callGroqCloud(systemPrompt, contents)
+              : entry.provider === "ollama"
+                ? await callOllamaCloud(entry, systemPrompt, contents)
+                : (() => {
+                    // Reachable only once env.openai.enabled flips true; the registry
+                    // still marks these entries enabled with no adapter behind them yet.
+                    // Fail loudly here rather than silently skipping to the next candidate.
+                    throw ApiError.internal(
+                      `OpenAI is enabled in config but no call adapter is implemented yet for ${entry.id}.`
+                    );
+                  })();
         recordSuccess(entry.id);
         lastUsedEntry = entry;
         return result;
@@ -402,6 +404,62 @@ export function buildGraph({ mode, user, scanIds }) {
               ? error
               : ApiError.internal(`The AI service is unavailable right now. ${error.message}`);
           wrapped.nonTransient = !isTransient(error);
+          throw wrapped;
+        }
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay *= 2;
+      }
+    }
+  }
+
+  const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+
+  /**
+   * Groq's chat-completions endpoint. Groq is OpenAI-compatible, so this reuses the same
+   * Gemini-shaped-to-OpenAI-shaped translation built for Ollama below -- only the URL,
+   * auth header, and response envelope (`choices[0].message` vs. Ollama's bare `message`)
+   * differ.
+   */
+  async function callGroqCloud(systemPrompt, contents) {
+    let delay = 800;
+    const attempts = env.ai.maxProviderAttempts;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const response = await fetch(GROQ_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${env.groq.apiKey}`,
+          },
+          signal: AbortSignal.timeout(env.groq.timeoutMs),
+          body: JSON.stringify({
+            model: env.groq.model,
+            messages: toOllamaMessages(systemPrompt, contents),
+            tools: toOllamaTools(toolDeclarations),
+          }),
+        });
+        if (!response.ok) {
+          const body = await response.text().catch(() => "");
+          const error = new Error(`Groq request failed (${response.status}): ${body.slice(0, 200)}`);
+          error.status = response.status;
+          throw error;
+        }
+        const data = await response.json();
+        return normalizeOllamaMessage(data?.choices?.[0]?.message);
+      } catch (error) {
+        // A 429 means the account's request quota is already spent for this window --
+        // retrying immediately gets the same answer every time, so it is treated as
+        // non-transient here rather than burning attempts on it.
+        const transient =
+          error.status !== 429 &&
+          (error.name === "TimeoutError" ||
+            error.name === "AbortError" ||
+            [408, 425, 500, 502, 503, 504].includes(error.status) ||
+            isTransient(error));
+        const lastAttempt = attempt === attempts;
+        if (lastAttempt || !transient) {
+          const wrapped = ApiError.internal(`The Groq AI service is unavailable right now. ${error.message}`);
+          wrapped.nonTransient = !transient;
           throw wrapped;
         }
         await new Promise((resolve) => setTimeout(resolve, delay));

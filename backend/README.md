@@ -17,7 +17,7 @@ everything around it:
 | Generating AI explanations | Converting an exported report to PDF |
 | Organisations, invitations, member oversight | |
 
-Two consequences worth noting. The Gemini API key lives on the server, so it is never shipped
+Two consequences worth noting. The Groq API key lives on the server, so it is never shipped
 inside a downloadable program and can be replaced centrally. And detection stays deterministic:
 the rules in the desktop app decide what a problem is, and the AI here only puts a confirmed
 finding into readable words.
@@ -26,7 +26,8 @@ finding into readable words.
 
 - Node.js 18.17 or newer
 - A Firebase project with **Firestore** and **Email/Password authentication** enabled
-- A Gemini API key, only if you want AI explanations
+- A Groq API key, only if you want AI explanations (free, no card required, from
+  console.groq.com)
 
 ## Setup
 
@@ -44,7 +45,7 @@ Filling in `.env` needs three things from the Firebase console:
    the key grants full access to your project.
 2. **Web API key.** Project settings, General, Web API Key. The Admin SDK cannot check a
    password, so sign-in calls Google's Identity Toolkit with this key.
-3. **Gemini API key**, if you want explanations. Leave it blank and the rest of the API works
+3. **Groq API key**, if you want explanations. Leave it blank and the rest of the API works
    normally, with the explain endpoint reporting that the feature is switched off.
 
 Then deploy the database rules:
@@ -300,8 +301,8 @@ backend/
       users.service.js          accounts and custom claims
       organisations.service.js  membership, invitations, flag and review
       scans.service.js          history, retention, comparison
-      gemini.service.js         AI explanations, with redaction (the live path)
-      aiGraph.service.js        LangGraph orchestration prototype, not wired in (see below)
+      aiGraph.service.js        AI explanations, with redaction (the live path; see below)
+      groq.service.js           unused, left in place as reference for aiGraph.service.js
       report.service.js         HTML report rendering
       audit.service.js          append-only record of admin actions
     utils/
@@ -311,13 +312,15 @@ backend/
   firestore.rules          deny-by-default database rules
 ```
 
-## AI orchestration prototype (not wired in)
+## AI orchestration (LangGraph)
 
-`src/services/aiGraph.service.js` is a LangGraph rebuild of the explanation layer, sitting
-next to `gemini.service.js` rather than replacing it. **No route imports it.** It exists to
-be reviewed and exercised standalone before any endpoint is switched over to it.
+`src/services/aiGraph.service.js` is a LangGraph rebuild of the explanation layer, wired in
+at `scans.routes.js` and `reports.routes.js` in place of the old single-shot
+`gemini.service.js`/`groq.service.js` calls, both left in the tree unused. It routes each
+call through `aiModelRouter.js`'s fallback chain (Gemini, then Groq, then any configured
+Ollama models, then OpenAI once enabled), trying the next provider when one fails outright.
 
-What it adds over `gemini.service.js`: tool calls instead of one fixed prompt (the model
+What it adds over a single-shot call: tool calls instead of one fixed prompt (the model
 asks for a finding's evidence, a scan's summary, guidance for a category, or a diff between
 two scans, rather than having everything handed to it up front), an output `responseSchema`
 per mode instead of prose-described JSON, and a one-shot repair loop for a malformed reply

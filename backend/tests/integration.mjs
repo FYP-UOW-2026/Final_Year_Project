@@ -22,7 +22,7 @@ process.env.FIREBASE_AUTH_EMULATOR_HOST = process.env.FIREBASE_AUTH_EMULATOR_HOS
 // No service account is set. The emulators accept any caller, and config/firebase.js
 // skips the credential entirely when the emulator variables above are present.
 process.env.FIREBASE_WEB_API_KEY = "emulator-key";
-process.env.GEMINI_API_KEY = "";
+process.env.GROQ_API_KEY = "";
 process.env.FREE_HISTORY_LIMIT = "3"; // small, so retention is quick to prove
 
 const { createApp } = await import("../src/app.js");

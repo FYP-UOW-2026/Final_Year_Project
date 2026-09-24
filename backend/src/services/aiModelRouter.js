@@ -12,15 +12,16 @@ import { modelRegistry } from "./aiModelRegistry.js";
 
 /**
  * Every aiGraph mode routes to the same ordered candidate list today: Gemini first (the
- * live provider), then Ollama, then OpenAI last -- OpenAI is never preferred just
- * because it becomes available, only used once both of the others are exhausted. The
- * OpenAI entries are inert (registry marks them disabled) until OPENAI_ENABLED=true
- * plus a key and models are configured; unlike Ollama, no call path exists for them yet
- * -- registering the route ahead of that is deliberate so enabling it later needs no
- * router change, only the adapter.
+ * live provider), then Groq (hosted, no local runtime needed), then Ollama, then OpenAI
+ * last -- OpenAI is never preferred just because it becomes available, only used once
+ * all the others are exhausted. The OpenAI entries are inert (registry marks them
+ * disabled) until OPENAI_ENABLED=true plus a key and models are configured; unlike
+ * Ollama and Groq, no call path exists for them yet -- registering the route ahead of
+ * that is deliberate so enabling it later needs no router change, only the adapter.
  */
 const fallbackChain = [
   `gemini:${env.gemini.model}`,
+  `groq:${env.groq.model}`,
   ...env.ollama.models.map((m) => `ollama:${m}`),
   ...env.openai.models.map((m) => `openai:${m}`),
 ];
