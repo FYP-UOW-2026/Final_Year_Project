@@ -33,6 +33,7 @@ import { redact, redactFinding } from "../utils/redact.js";
 import * as knowledgeBase from "./knowledgeBase.js";
 import { getScanForCaller, compareScans } from "./scans.service.js";
 import { SEVERITIES } from "../constants/index.js";
+import { pickModels, recordSuccess, recordFailure } from "./aiModelRouter.js";
 
 /* ------------------------------------------------------------------------------------ *
  * Model client -- reused config, not a new dependency on @langchain/google-genai. The
@@ -227,8 +228,16 @@ Rules:
 - Do not invent evidence, file names, or line numbers that are not returned by a tool.
 - Use tools to gather what you need rather than assuming. Call get_guidance for the category before writing a fix.`;
 
+/**
+ * Prompt registry -- one versioned entry per mode. `promptId`/`promptVersion` are
+ * carried through to invoke()'s return value so a caller (or a future experiment
+ * service) can tell which prompt produced a given result. Bump `promptVersion` on any
+ * wording change to that mode's systemPrompt rather than editing it silently in place.
+ */
 const MODES = {
   explain: {
+    promptId: "explain",
+    promptVersion: "1.0.0",
     systemPrompt: `${BASE_RULES}
 
 You are explaining ONE finding. Call get_finding_evidence for it and get_guidance for its category, then respond. Keep the explanation to three sentences or fewer, and the fix to four sentences or fewer.`,
@@ -239,6 +248,8 @@ You are explaining ONE finding. Call get_finding_evidence for it and get_guidanc
     }),
   },
   synthesize: {
+    promptId: "synthesize",
+    promptVersion: "1.0.0",
     systemPrompt: `${BASE_RULES}
 
 You are summarising a whole scan. Call get_scan_summary and list_findings rather than assuming content. Identify which findings compound each other and what to fix first.`,
@@ -249,6 +260,8 @@ You are summarising a whole scan. Call get_scan_summary and list_findings rather
     }),
   },
   compare: {
+    promptId: "compare",
+    promptVersion: "1.0.0",
     systemPrompt: `${BASE_RULES}
 
 You are narrating the difference between two scans of the same app. Call compare_scans. Say plainly what got fixed and what regressed.`,
@@ -259,6 +272,8 @@ You are narrating the difference between two scans of the same app. Call compare
     }),
   },
   report: {
+    promptId: "report",
+    promptVersion: "1.0.0",
     systemPrompt: `${BASE_RULES}
 
 You are writing a report for one scan. Call get_scan_summary and list_findings, and get_guidance for categories that need it. Produce a short executive summary and a section per theme, not per finding.`,
@@ -281,7 +296,7 @@ const GraphState = Annotation.Root({
   toolCallCount: Annotation({ reducer: (_a, b) => b, default: () => 0 }),
   egressLog: Annotation({ reducer: (a, b) => a.concat(b), default: () => [] }),
   result: Annotation(),
-  repaired: Annotation({ reducer: (_a, b) => b, default: () => false }),
+  repairCount: Annotation({ reducer: (_a, b) => b, default: () => 0 }),
 });
 
 function parseModelJson(text) {
@@ -304,6 +319,7 @@ export function buildGraph({ mode, user, scanIds }) {
   if (!modeDef) throw ApiError.badRequest(`Unknown AI graph mode: ${mode}`);
 
   const state = { egressLog: [] };
+  let lastUsedEntry = null;
   const tools = buildTools(state, { user, scanIds });
   const toolMap = new Map(tools.map((t) => [t.name, t]));
   const toolDeclarations = tools.map((t) => ({
@@ -312,39 +328,140 @@ export function buildGraph({ mode, user, scanIds }) {
     parameters: zodToGeminiSchema(t.schema),
   }));
 
+  /**
+   * Provider-independent entry point. Tries each qualifying candidate for this mode in
+   * route order (today: gemini:<model>, then any configured ollama:<model> as fallback).
+   * A candidate that fails outright after its own retries records the failure against
+   * its own circuit breaker and cedes to the next one; a non-transient error (bad
+   * input, auth) is not retried across candidates since a different model won't fix it.
+   */
   async function callModel(contents, extraSystemNote) {
+    const systemPrompt = extraSystemNote
+      ? `${modeDef.systemPrompt}\n\n${extraSystemNote}`
+      : modeDef.systemPrompt;
+
+    const candidates = pickModels(mode);
+    if (candidates.length === 0) {
+      throw ApiError.internal(`No healthy AI model available for mode: ${mode}`);
+    }
+
+    let lastError;
+    for (const entry of candidates) {
+      try {
+        const result =
+          entry.provider === "gemini"
+            ? await callGemini(systemPrompt, contents)
+            : entry.provider === "ollama"
+              ? await callOllamaCloud(entry, systemPrompt, contents)
+              : (() => {
+                  // Reachable only once env.openai.enabled flips true; the registry
+                  // still marks these entries enabled with no adapter behind them yet.
+                  // Fail loudly here rather than silently skipping to the next candidate.
+                  throw ApiError.internal(
+                    `OpenAI is enabled in config but no call adapter is implemented yet for ${entry.id}.`
+                  );
+                })();
+        recordSuccess(entry.id);
+        lastUsedEntry = entry;
+        return result;
+      } catch (error) {
+        recordFailure(entry.id);
+        lastError = error;
+        if (error?.nonTransient) throw error;
+        // else: exhausted this candidate's own retries on a transient condition -- try the next one.
+      }
+    }
+    throw lastError instanceof ApiError
+      ? lastError
+      : ApiError.internal(`The AI service is unavailable right now. ${lastError?.message ?? ""}`);
+  }
+
+  /** Gemini call, normalized to { parts, text } so the rest of the graph is provider-agnostic. */
+  async function callGemini(systemPrompt, contents) {
     const client = await loadClient();
     let delay = 800;
-    const attempts = 3;
+    const attempts = env.ai.maxProviderAttempts;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
-        return await client.models.generateContent({
+        const response = await client.models.generateContent({
           model: env.gemini.model,
           contents,
           config: {
-            systemInstruction: extraSystemNote
-              ? `${modeDef.systemPrompt}\n\n${extraSystemNote}`
-              : modeDef.systemPrompt,
+            systemInstruction: systemPrompt,
             tools: [{ functionDeclarations: toolDeclarations }],
           },
         });
+        const parts = response?.candidates?.[0]?.content?.parts ?? [];
+        const text = response.text ?? parts.find((p) => p.text)?.text ?? "";
+        return { parts, text };
       } catch (error) {
         const lastAttempt = attempt === attempts;
         if (lastAttempt || !isTransient(error)) {
-          if (error instanceof ApiError) throw error;
-          throw ApiError.internal(`The AI service is unavailable right now. ${error.message}`);
+          const wrapped =
+            error instanceof ApiError
+              ? error
+              : ApiError.internal(`The AI service is unavailable right now. ${error.message}`);
+          wrapped.nonTransient = !isTransient(error);
+          throw wrapped;
         }
         await new Promise((resolve) => setTimeout(resolve, delay));
         delay *= 2;
       }
     }
-    throw ApiError.internal("The AI service is unavailable right now.");
+  }
+
+  /**
+   * Ollama Cloud call over its native /api/chat, translating our Gemini-shaped message
+   * history and tool declarations to and from Ollama's OpenAI-style tool-call shape so
+   * agentNode/toolsNode never need to know which provider answered.
+   */
+  async function callOllamaCloud(entry, systemPrompt, contents) {
+    let delay = 800;
+    const attempts = env.ai.maxProviderAttempts;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const response = await fetch(`${env.ollama.baseUrl.replace(/\/$/, "")}/api/chat`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(env.ollama.key ? { Authorization: `Bearer ${env.ollama.key}` } : {}),
+          },
+          signal: AbortSignal.timeout(env.ai.requestTimeoutMs),
+          body: JSON.stringify({
+            model: entry.model,
+            stream: false,
+            messages: toOllamaMessages(systemPrompt, contents),
+            tools: toOllamaTools(toolDeclarations),
+          }),
+        });
+        if (!response.ok) {
+          const body = await response.text().catch(() => "");
+          const error = new Error(`Ollama request failed (${response.status}): ${body.slice(0, 200)}`);
+          error.status = response.status;
+          throw error;
+        }
+        const data = await response.json();
+        return normalizeOllamaMessage(data?.message);
+      } catch (error) {
+        const transient =
+          error.name === "TimeoutError" ||
+          error.name === "AbortError" ||
+          [408, 425, 429, 500, 502, 503, 504].includes(error.status) ||
+          isTransient(error);
+        const lastAttempt = attempt === attempts;
+        if (lastAttempt || !transient) {
+          const wrapped = ApiError.internal(`The Ollama AI service is unavailable right now. ${error.message}`);
+          wrapped.nonTransient = !transient;
+          throw wrapped;
+        }
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay *= 2;
+      }
+    }
   }
 
   async function agentNode(s) {
-    const response = await callModel(s.messages);
-    const candidate = response?.candidates?.[0];
-    const parts = candidate?.content?.parts ?? [];
+    const { parts, text } = await callModel(s.messages);
     const functionCalls = parts.filter((p) => p.functionCall).map((p) => p.functionCall);
 
     if (functionCalls.length > 0 && s.toolCallCount < TOOL_CALL_BUDGET) {
@@ -355,7 +472,6 @@ export function buildGraph({ mode, user, scanIds }) {
       };
     }
 
-    const text = response.text ?? parts.find((p) => p.text)?.text ?? "";
     return { messages: [{ role: "model", parts }], result: text };
   }
 
@@ -389,12 +505,14 @@ export function buildGraph({ mode, user, scanIds }) {
     return check.success ? { result: check.data } : { result: null };
   }
 
+  const MAX_REPAIR_ATTEMPTS = 2;
+
   async function repairNode(s) {
-    if (s.repaired) {
+    if (s.repairCount >= MAX_REPAIR_ATTEMPTS) {
       throw ApiError.internal("The AI service returned a response we could not read.");
     }
     return {
-      repaired: true,
+      repairCount: s.repairCount + 1,
       messages: [
         {
           role: "user",
@@ -434,16 +552,66 @@ export function buildGraph({ mode, user, scanIds }) {
         input: userContent,
         messages: [{ role: "user", parts: [{ text: userContent }] }],
       };
+      const startedAt = Date.now();
       const finalState = await compiled.invoke(initial);
       return {
         result: finalState.result,
         egressLog: state.egressLog,
         toolCallCount: finalState.toolCallCount ?? 0,
-        model: env.gemini.model,
+        promptId: modeDef.promptId,
+        promptVersion: modeDef.promptVersion,
+        provider: lastUsedEntry?.provider ?? null,
+        model: lastUsedEntry?.model ?? env.gemini.model,
+        latencyMs: Date.now() - startedAt,
       };
     },
     egressLog: state.egressLog,
   };
+}
+
+/** Our internal history is Gemini-shaped (role + parts); translate it for Ollama's /api/chat. */
+function toOllamaMessages(systemPrompt, contents) {
+  const messages = [{ role: "system", content: systemPrompt }];
+  for (const turn of contents) {
+    const role = turn.role === "model" ? "assistant" : "user";
+    for (const part of turn.parts ?? []) {
+      if (part.text) {
+        messages.push({ role, content: part.text });
+      } else if (part.functionCall) {
+        messages.push({
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            { function: { name: part.functionCall.name, arguments: part.functionCall.args ?? {} } },
+          ],
+        });
+      } else if (part.functionResponse) {
+        messages.push({
+          role: "tool",
+          content: JSON.stringify(part.functionResponse.response ?? {}),
+        });
+      }
+    }
+  }
+  return messages;
+}
+
+/** Gemini functionDeclarations -> Ollama's OpenAI-style tool schema. */
+function toOllamaTools(toolDeclarations) {
+  return toolDeclarations.map((t) => ({
+    type: "function",
+    function: { name: t.name, description: t.description, parameters: t.parameters },
+  }));
+}
+
+/** Ollama's chat message -> our internal { parts, text } shape. */
+function normalizeOllamaMessage(message) {
+  const parts = [];
+  for (const call of message?.tool_calls ?? []) {
+    parts.push({ functionCall: { name: call.function?.name, args: call.function?.arguments ?? {} } });
+  }
+  if (message?.content) parts.push({ text: message.content });
+  return { parts, text: message?.content ?? "" };
 }
 
 /** Minimal zod-to-Gemini-function-schema translation for the shapes this file uses. */
