@@ -17,7 +17,13 @@ import { z } from "zod";
 import { db } from "../config/firebase.js";
 import { env } from "../config/env.js";
 import { COLLECTIONS, SCAN_TYPES, SEVERITIES, TIERS } from "../constants/index.js";
-import { denyAdmin, loadProfile, requireAuth, requirePremium } from "../middleware/auth.js";
+import {
+  denyAdmin,
+  loadProfile,
+  requireAuth,
+  requirePremium,
+  requireVerifiedStudent,
+} from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import * as audit from "../services/audit.service.js";
 import * as groq from "../services/groq.service.js";
@@ -55,6 +61,7 @@ const findingSchema = z.object({
 router.post(
   "/",
   denyAdmin,
+  requireVerifiedStudent,
   validate({
     body: z.object({
       type: z.enum([SCAN_TYPES.APK, SCAN_TYPES.DEVICE]),
@@ -147,6 +154,7 @@ router.get(
  */
 router.post(
   "/:scanId/findings/:findingIndex/explain",
+  requireVerifiedStudent,
   validate({
     params: z.object({
       scanId: z.string().min(1),

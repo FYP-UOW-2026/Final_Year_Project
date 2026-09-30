@@ -139,6 +139,22 @@ class Account:
     def is_admin(self) -> bool:
         return self.role == "admin"
 
+    @property
+    def student_verification(self) -> dict:
+        """The server's view of this account's student status.
+
+        Keys: status ("unverified" / "pending" / "verified"), required (whether the
+        free plan needs it on this account), eligible (whether the email is at a
+        university domain).
+        """
+        return self.raw.get("studentVerification") or {}
+
+    @property
+    def needs_student_verification(self) -> bool:
+        """True while a free personal account is locked out of scanning until verified."""
+        sv = self.student_verification
+        return bool(sv.get("required")) and sv.get("status") != "verified"
+
 
 class ApiClient:
     """Talks to the BioAudit backend.
@@ -225,10 +241,15 @@ class ApiClient:
     # --- authentication ---------------------------------------------------
 
     def register(self, email: str, password: str,
-                 display_name: Optional[str] = None) -> Account:
+                 display_name: Optional[str] = None,
+                 university_id: Optional[str] = None) -> Account:
+        """Create a personal account. `university_id` comes from list_universities();
+        the server then requires the email to be one that university issues."""
         payload = {"email": email, "password": password}
         if display_name:
             payload["displayName"] = display_name
+        if university_id:
+            payload["universityId"] = university_id
 
         data = self._request("POST", "/auth/register", body=payload, authenticated=False)
         self.session = Session.from_payload(data["session"])
@@ -291,6 +312,28 @@ class ApiClient:
 
     def get_profile(self) -> Account:
         data = self._request("GET", "/users/me")
+        self.account = Account.from_payload(data["user"])
+        return self.account
+
+    def list_universities(self) -> list[dict]:
+        """Universities a student can pick at sign-up, each with its email domains."""
+        data = self._request("GET", "/universities", authenticated=False, timeout=10)
+        return data.get("universities", [])
+
+    def send_student_code(self, university_id: Any = ...) -> str:
+        """Email a fresh student verification code. Returns the server's message.
+
+        Pass `university_id` to choose or change the university first; None means
+        "my university isn't listed". Leave it out to keep the current choice.
+        """
+        body = None if university_id is ... else {"universityId": university_id}
+        data = self._request("POST", "/users/me/student-verification/send", body=body)
+        return data.get("message", "")
+
+    def verify_student_code(self, code: str) -> Account:
+        """Confirm the university email with the code from the email."""
+        data = self._request("POST", "/users/me/student-verification/verify",
+                             body={"code": code.strip()})
         self.account = Account.from_payload(data["user"])
         return self.account
 

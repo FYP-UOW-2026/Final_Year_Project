@@ -2,7 +2,7 @@
 
 Covers the functional-hierarchy items that belong to a signed-in user rather than to
 scanning: update account details, change email address, change password, delete account,
-and join an organisation from an invitation.
+join an organisation from an invitation, and verify a student email for the free plan.
 
 Three of these end the session on purpose. Changing a password signs every device out,
 and deleting an account obviously does too. Each returns a result telling the caller
@@ -339,6 +339,127 @@ def show_join_organisation_dialog(parent, client: ApiClient) -> DialogResult:
             self.accept()
 
     JoinDialog().exec()
+    return result
+
+
+def show_student_verification_dialog(parent, client: ApiClient) -> DialogResult:
+    """Enter the code emailed to a university address, unlocking the free plan.
+
+    The free plan is for students, so a free personal account cannot run assessments
+    until this is done. An account whose email is not at a university gets an
+    explanation instead of a code box, since no code could ever be sent to it.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import (
+        QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+        QPushButton, QVBoxLayout,
+    )
+
+    result = DialogResult()
+    account = client.account
+    sv = account.student_verification if account else {}
+    eligible = bool(sv.get("eligible"))
+    university = (sv.get("university") or {}).get("name")
+    # No code has gone out yet (an older account, or one whose email just changed), so
+    # the first press sends one rather than re-sending.
+    never_sent = sv.get("status") == "unverified"
+
+    class StudentDialog(QDialog):
+        def __init__(self) -> None:
+            super().__init__(parent)
+            self.setWindowTitle("Verify your student email")
+            self.setMinimumWidth(480)
+            layout = QVBoxLayout(self)
+
+            if not eligible:
+                what = f"a {university}" if university else "a university"
+                note = QLabel(
+                    "The free plan is for students, and "
+                    f"<b>{account.email if account else 'this address'}</b> is not "
+                    f"{what} email address.<br><br>To use the free plan, change your "
+                    "account email to your university address in Account settings and "
+                    "verify it. Otherwise, upgrade to premium.<br><br>You can still view "
+                    "and delete any history you already have.")
+                note.setWordWrap(True)
+                layout.addWidget(note)
+                buttons = QDialogButtonBox(QDialogButtonBox.Close)
+                buttons.rejected.connect(self.reject)
+                layout.addWidget(buttons)
+                return
+
+            where = f" at <b>{university}</b>" if university else ""
+            if never_sent:
+                text = (f"The free plan is for students{where}. Press <b>Send code</b> and we "
+                        f"will email a six-digit code to <b>{account.email}</b>.")
+            else:
+                text = (f"The free plan is for students{where}. Enter the six-digit code we "
+                        f"emailed to <b>{account.email}</b> to unlock scanning. Codes expire "
+                        "after 15 minutes.")
+            intro = QLabel(text)
+            intro.setWordWrap(True)
+            layout.addWidget(intro)
+
+            self.code_edit = QLineEdit()
+            self.code_edit.setPlaceholderText("123456")
+            self.code_edit.setMaxLength(6)
+            self.code_edit.setAlignment(Qt.AlignCenter)
+            self.code_edit.setStyleSheet("font-size: 20px; letter-spacing: 6px;")
+            self.code_edit.returnPressed.connect(self._verify)
+            layout.addWidget(self.code_edit)
+
+            self.status = QLabel("")
+            self.status.setWordWrap(True)
+            layout.addWidget(self.status)
+
+            row = QHBoxLayout()
+            resend = QPushButton("Send code" if never_sent else "Send a new code")
+            resend.clicked.connect(self._resend)
+            row.addWidget(resend)
+            row.addStretch(1)
+            later = QPushButton("Later")
+            later.clicked.connect(self.reject)
+            row.addWidget(later)
+            verify = QPushButton("Verify")
+            verify.setDefault(True)
+            verify.clicked.connect(self._verify)
+            row.addWidget(verify)
+            layout.addLayout(row)
+
+        def _show(self, message: str, error: bool) -> None:
+            colour = "#b00020" if error else "#1b5e20"
+            self.status.setText(f"<span style='color:{colour}'>{message}</span>")
+
+        def _resend(self) -> None:
+            try:
+                self.setCursor(Qt.WaitCursor)
+                message = client.send_student_code()
+            except ApiClientError as exc:
+                self._show(str(exc), error=True)
+                return
+            finally:
+                self.setCursor(Qt.ArrowCursor)
+            self._show(message, error=False)
+
+        def _verify(self) -> None:
+            code = self.code_edit.text().strip()
+            if len(code) != 6 or not code.isdigit():
+                self._show("Enter the six-digit code from the email.", error=True)
+                return
+            try:
+                self.setCursor(Qt.WaitCursor)
+                client.verify_student_code(code)
+            except ApiClientError as exc:
+                self._show(str(exc), error=True)
+                return
+            finally:
+                self.setCursor(Qt.ArrowCursor)
+
+            result.changed = True
+            result.message = "Your university email is verified. You can now run scans."
+            QMessageBox.information(self, "Verified", result.message)
+            self.accept()
+
+    StudentDialog().exec()
     return result
 
 
