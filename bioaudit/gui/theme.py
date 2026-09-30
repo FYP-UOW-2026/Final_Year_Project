@@ -205,6 +205,27 @@ QPushButton#primary:disabled {{
     border-color: {p["border"]};
 }}
 
+/* Two-way switch, e.g. "I'm a student" / "I'm setting up a team" at sign-up. */
+QPushButton#segment {{
+    background: {p["surface_alt"]};
+    color: {p["muted"]};
+    border: 1px solid {p["border_strong"]};
+    border-radius: 0;
+    padding: 9px 14px;
+}}
+QPushButton#segment[segmentPos="left"] {{
+    border-top-left-radius: 8px; border-bottom-left-radius: 8px;
+}}
+QPushButton#segment[segmentPos="right"] {{
+    border-top-right-radius: 8px; border-bottom-right-radius: 8px; border-left: none;
+}}
+QPushButton#segment:hover {{ color: {p["text"]}; }}
+QPushButton#segment:checked {{
+    background: {p["primary"]};
+    color: {p["primary_text"]};
+    border-color: {p["primary"]};
+}}
+
 /* --- home tiles ------------------------------------------------------ */
 {tiles}
 QLabel#tileIcon {{ font-size: 28pt; background: transparent; }}
@@ -312,6 +333,13 @@ QToolTip {{
 
 /* --- named labels -------------------------------------------------- */
 QLabel#hint {{ color: {p["muted"]}; font-size: 9pt; }}
+QLabel#universityHint {{
+    background: {p["surface_alt"]};
+    border-left: 3px solid {p["primary"]};
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: 9pt;
+}}
 QLabel#fieldLabel {{ color: {p["muted"]}; font-weight: 600; font-size: 9pt; }}
 QLabel#accountBadge {{ color: {p["muted"]}; padding-right: 8px; }}
 """

@@ -1,12 +1,16 @@
 """End-to-end tests for the API client against a running backend.
 
-These are skipped unless a server is reachable, so the normal `pytest tests/` run stays
-offline and needs nothing installed. To run them:
+These are skipped unless a server backed by the Firebase emulators is reachable, so the
+normal `pytest tests/` run stays offline and needs nothing installed. A server on a live
+Firebase project is deliberately skipped too: these tests register accounts, and against
+a real project they would be left behind. To run them:
 
     cd backend
-    npm run emulators          # leave this running
-    node tests/serve-emulated.mjs   # leave this running too
+    npm run dev:emulated       # emulators + API on port 4000; leave this running
     pytest tests/test_api_client.py -v
+
+If port 4000 is taken, start it with PORT=4002 and set BIOAUDIT_TEST_API to
+http://127.0.0.1:4002/api for the pytest run.
 
 The point of testing against a real server rather than a mock is that a mock would only
 prove the client agrees with my assumptions. This proves it agrees with the API.
@@ -14,6 +18,9 @@ prove the client agrees with my assumptions. This proves it agrees with the API.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import random
 import string
 import urllib.error
@@ -24,20 +31,25 @@ import pytest
 from bioaudit.api import ApiClient, ApiClientError
 from bioaudit.models import Finding, Severity, TestRun
 
-BASE_URL = "http://127.0.0.1:4000/api"
+# Overridable so the suite can run while another backend already holds port 4000.
+BASE_URL = os.environ.get("BIOAUDIT_TEST_API", "http://127.0.0.1:4000/api")
+# Where `npm run dev:emulated` puts Firestore, and the project it runs as.
+FIRESTORE_EMULATOR = os.environ.get("FIRESTORE_EMULATOR_HOST", "127.0.0.1:8080")
+EMULATOR_PROJECT = "bioaudit-test"
 
 
-def _server_available() -> bool:
+def _emulated_server_available() -> bool:
     try:
         with urllib.request.urlopen(f"{BASE_URL}/health", timeout=2) as response:
-            return response.status == 200
-    except (urllib.error.URLError, OSError):
+            health = json.loads(response.read())
+    except (urllib.error.URLError, OSError, ValueError):
         return False
+    return health.get("status") == "ok" and health.get("database") == "emulator"
 
 
 pytestmark = pytest.mark.skipif(
-    not _server_available(),
-    reason=f"No backend reachable at {BASE_URL}. See this file's docstring to run these.",
+    not _emulated_server_available(),
+    reason=f"No emulator-backed backend at {BASE_URL}. See this file's docstring to run these.",
 )
 
 
@@ -50,9 +62,31 @@ def client() -> ApiClient:
     return ApiClient(BASE_URL)
 
 
+def _verify_student(client: ApiClient) -> None:
+    """Complete student verification without an inbox.
+
+    The real code only leaves the server by email, so this overwrites the stored hash
+    with one for a known code, straight in the Firestore emulator (which accepts the
+    "owner" token from anyone), then enters that code the way a user would.
+    """
+    uid = client.account.id
+    code = "135790"
+    doc = (f"http://{FIRESTORE_EMULATOR}/v1/projects/{EMULATOR_PROJECT}/databases/(default)"
+           f"/documents/studentVerifications/{uid}?updateMask.fieldPaths=codeHash")
+    body = {"fields": {"codeHash": {
+        "stringValue": hashlib.sha256(f"{uid}:{code}".encode()).hexdigest()}}}
+    request = urllib.request.Request(
+        doc, data=json.dumps(body).encode(), method="PATCH",
+        headers={"Content-Type": "application/json", "Authorization": "Bearer owner"})
+    urllib.request.urlopen(request, timeout=5).close()
+    client.verify_student_code(code)
+
+
 @pytest.fixture
 def signed_in(client: ApiClient) -> ApiClient:
-    client.register(f"pytest-{_unique()}@example.com", "pytest-password-1", "Pytest User")
+    """A free account that can use the free plan, which means a verified student."""
+    client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1", "Pytest User")
+    _verify_student(client)
     return client
 
 
@@ -119,6 +153,32 @@ def test_unknown_email_and_wrong_password_look_identical(client: ApiClient):
         client.login(f"nobody-{_unique()}@example.com", "definitely-wrong")
 
     assert wrong_password.value.message == unknown_email.value.message
+
+
+def test_universities_are_listed(client: ApiClient):
+    universities = client.list_universities()
+    oxford = next(u for u in universities if u["id"] == "oxford")
+    assert oxford["domains"] == ["ox.ac.uk"]
+
+
+def test_registering_needs_an_email_from_the_chosen_university(client: ApiClient):
+    with pytest.raises(ApiClientError) as exc:
+        client.register(f"pytest-{_unique()}@example.com", "pytest-password-1",
+                        university_id="oxford")
+    assert exc.value.status == 400
+    assert "@ox.ac.uk" in exc.value.message
+
+
+def test_unverified_student_cannot_upload(client: ApiClient):
+    account = client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1")
+    assert account.needs_student_verification
+    with pytest.raises(ApiClientError) as exc:
+        client.upload_run(_sample_run(), authorised=True)
+    assert exc.value.status == 403
+
+    _verify_student(client)
+    assert not client.account.needs_student_verification
+    assert client.upload_run(_sample_run(), authorised=True)["scan"]["id"]
 
 
 def test_upload_run_and_read_it_back(signed_in: ApiClient):

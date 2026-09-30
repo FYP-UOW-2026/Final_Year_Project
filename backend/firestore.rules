@@ -48,6 +48,12 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Student verification codes are only six digits, so even their hash must stay out of
+    // reach of the client: trying all million values would take seconds.
+    match /studentVerifications/{userId} {
+      allow read, write: if false;
+    }
+
     // A scan belongs to the person who ran it. Admin access to a member's scans is
     // granted by the API instead, because it also writes an audit entry for the read.
     match /scans/{scanId} {

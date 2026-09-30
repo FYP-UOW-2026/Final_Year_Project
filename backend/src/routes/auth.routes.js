@@ -17,6 +17,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import * as firebaseAuth from "../services/firebaseAuth.service.js";
 import * as organisations from "../services/organisations.service.js";
+import * as studentVerification from "../services/studentVerification.service.js";
 import * as usersService from "../services/users.service.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
@@ -41,7 +42,14 @@ const passwordSchema = z
   .min(8, "Use at least 8 characters.")
   .max(128, "That password is too long.");
 
-/** POST /api/auth/register -- Register user account */
+/**
+ * POST /api/auth/register -- Register user account
+ *
+ * Anyone may register, because an organisation's invitee or a future premium customer
+ * needs an account first too. A free personal account at a university address is sent a
+ * verification code here; the free plan's assessment features stay locked until it is
+ * entered (see requireVerifiedStudent).
+ */
 router.post(
   "/register",
   authLimiter,
@@ -50,19 +58,32 @@ router.post(
       email: emailSchema,
       password: passwordSchema,
       displayName: z.string().trim().min(1).max(80).optional(),
+      // From GET /api/universities. Omitted for "my university isn't listed" and for
+      // accounts that are not registering as students.
+      universityId: z.string().trim().min(1).max(60).optional(),
     }),
   }),
   asyncHandler(async (req, res) => {
+    // Checked before the account exists, so a mismatched email is a form error rather
+    // than an account that can never be verified.
+    studentVerification.assertEmailMatchesUniversity(req.body.email, req.body.universityId);
+
     const profile = await usersService.createAccount({
       email: req.body.email,
       password: req.body.password,
       displayName: req.body.displayName,
       role: ROLES.MEMBER,
       tier: TIERS.FREE,
+      universityId: req.body.universityId ?? null,
     });
 
     const session = await firebaseAuth.signInWithPassword(req.body.email, req.body.password);
-    res.status(201).json({ user: usersService.toPublicProfile({ id: profile.uid, ...profile }), session });
+    const sent = await studentVerification.sendCodeIfDue({ id: profile.uid, ...profile });
+    const finalProfile = sent
+      ? await usersService.getProfile(profile.uid)
+      : { id: profile.uid, ...profile };
+
+    res.status(201).json({ user: usersService.toPublicProfile(finalProfile), session });
   })
 );
 

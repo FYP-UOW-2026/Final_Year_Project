@@ -166,9 +166,30 @@ All paths are prefixed with `/api`. Every endpoint except registration, login, a
 | POST | `/users/me/email` | User: Change email address |
 | POST | `/users/me/password` | User: Change password |
 | DELETE | `/users/me` | User: Delete account |
+| GET | `/users/me/student-verification` | Free User: student verification status |
+| POST | `/users/me/student-verification/send` | Free User: email a new verification code |
+| POST | `/users/me/student-verification/verify` | Free User: Verify student email |
 
 Changing an email address or password requires the current password as well as a valid session,
 since a stolen token alone should not be enough to take an account over.
+
+**Student verification.** The free plan is for students. A free personal account (not premium,
+not an admin, not in an organisation) must verify a university email before it can save a scan
+or request an AI explanation; viewing and deleting existing history stays open. `.ac.uk`, `.edu`,
+`.edu.xx` and `.ac.xx` domains are accepted, plus any listed in `STUDENT_EMAIL_DOMAINS`. A
+six-digit code is emailed on registration and on changing to a university address. It expires
+after 15 minutes, allows 5 attempts, and can be re-sent once a minute. Students pick their university
+from a searchable list (`GET /universities`, defined in `src/data/universities.js`), and the email must
+be one that university issues; "my university isn't listed" falls back to the domain check above.
+
+Codes are emailed through Mailgun (`MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `MAILGUN_FROM`), or any SMTP
+server as a fallback; see `.env.example`, and check the settings with `npm run email:test -- you@x.com`.
+Production sends from the verified domain `bioaudit.me` as `BioAudit <no-reply@bioaudit.me>`. A Mailgun
+sandbox domain only delivers to its authorized recipients and tends to land in spam, so use it for
+trying things out only. If a send fails, a student's existing code is kept and they are told why (a
+sandbox refusal gets its own message). With no mail provider configured outside production, the code is
+printed to the server log instead; in production, sending is refused with a 503. Email is always off
+against the Firebase emulators, so tests never send real mail.
 
 ### Scans and history
 

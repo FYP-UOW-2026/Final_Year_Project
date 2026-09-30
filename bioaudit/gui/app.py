@@ -333,6 +333,12 @@ def run(cfg: Config | None = None) -> int:
             if self.api is None and not os.environ.get("BIOAUDIT_SKIP_WELCOME"):
                 from PySide6.QtCore import QTimer
                 QTimer.singleShot(0, self._require_signed_in_or_quit)
+            elif self.api is not None and not os.environ.get("BIOAUDIT_SKIP_WELCOME"):
+                # A saved session skips the welcome gate, so this is the only point a
+                # returning student who never entered their code would be asked for it,
+                # rather than finding out when a finished scan's upload is refused.
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(0, self._prompt_student_verification)
 
         # ---- Account ------------------------------------------------------ #
 
@@ -358,6 +364,12 @@ def run(cfg: Config | None = None) -> int:
                 "Change your display name, email address, or password, or delete your account.")
             self.action_settings.triggered.connect(self._open_account_settings)
             menu.addAction(self.action_settings)
+
+            self.action_verify_student = QAction("Verify student email…", self)
+            self.action_verify_student.setToolTip(
+                "The free plan is for students: verify your university email to run scans.")
+            self.action_verify_student.triggered.connect(self._verify_student)
+            menu.addAction(self.action_verify_student)
 
             self.action_join_org = QAction("Join an organisation…", self)
             self.action_join_org.triggered.connect(self._join_organisation)
@@ -419,6 +431,7 @@ def run(cfg: Config | None = None) -> int:
             self.cfg.api["enabled"] = True
             self.statusBar().showMessage(f"Signed in as {client.account.email}.")
             self._refresh_account_ui()
+            self._prompt_student_verification()
             return True
 
         def _require_signed_in_or_quit(self) -> None:
@@ -452,6 +465,8 @@ def run(cfg: Config | None = None) -> int:
             # Joining is only offered when you are not already in a team; the server refuses
             # a second organisation, so offering it would only produce an error.
             self.action_join_org.setEnabled(signed_in and not account.organisation_id)
+            self.action_verify_student.setVisible(
+                signed_in and account.needs_student_verification)
             self.action_upgrade.setEnabled(signed_in and not account.is_premium)
             self.action_cancel_sub.setEnabled(signed_in and account.is_premium)
 
@@ -501,6 +516,28 @@ def run(cfg: Config | None = None) -> int:
             self.cfg.api["enabled"] = True
             self._refresh_account_ui()
             self.statusBar().showMessage(f"Signed in as {client.account.email}")
+            self._prompt_student_verification()
+
+        def _prompt_student_verification(self) -> None:
+            """Ask for the student code straight after sign-in, while the email is fresh.
+
+            Without this, an unverified student would only find out at the end of a full
+            scan, when the upload is refused.
+            """
+            if self.api is None or self.api.account is None:
+                return
+            if self.api.account.needs_student_verification:
+                self._verify_student()
+
+        def _verify_student(self) -> None:
+            if self.api is None:
+                return
+            from .account_dialogs import show_student_verification_dialog
+
+            result = show_student_verification_dialog(self, self.api)
+            if result.changed:
+                self._refresh_account_ui()
+                self.statusBar().showMessage(result.message)
 
         def _sign_out(self) -> None:
             from .signin import clear_session
@@ -603,6 +640,7 @@ def run(cfg: Config | None = None) -> int:
                 f"<b>Name:</b> {account.display_name or 'not set'}",
                 f"<b>Plan:</b> {account.tier}",
                 f"<b>Role:</b> {account.role}",
+                f"<b>Student email:</b> {_student_status_text(account)}",
                 f"<b>Scans saved:</b> {account.scan_count}",
                 f"<b>History kept:</b> {'unlimited' if limit is None else f'newest {limit}'}",
             ]
@@ -1800,6 +1838,18 @@ def run(cfg: Config | None = None) -> int:
     window = MainWindow()
     window.show()
     return app.exec()
+
+
+def _student_status_text(account) -> str:
+    sv = account.student_verification
+    if not sv.get("required"):
+        return "not needed on this plan"
+    if sv.get("status") == "verified":
+        university = (sv.get("university") or {}).get("name")
+        return f"verified ({university})" if university else "verified"
+    if not sv.get("eligible"):
+        return "not a university address (the free plan is for students)"
+    return "not yet verified (Account menu, Verify student email)"
 
 
 def _comparison_html(comparison: dict, palette: dict) -> str:

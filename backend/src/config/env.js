@@ -103,19 +103,65 @@ export const env = {
   },
 
   /**
-   * Outbound email. Optional in the same way the AI layer is: with no host configured
+   * Outbound email. Optional in the same way the AI layer is: with nothing configured
    * the app runs normally and simply does not send, so a developer running locally is
-   * never blocked by not having SMTP credentials. Nothing in the product depends on a
-   * message arriving -- an invitation token is shown on screen as well as emailed.
+   * never blocked by not having mail credentials. In production it is needed, because
+   * student verification codes are only ever delivered by email.
+   *
+   * Mailgun (MAILGUN_API_KEY + MAILGUN_DOMAIN) is used when configured; otherwise any
+   * SMTP provider works through SMTP_HOST, SMTP_USER and SMTP_PASS.
    */
   email: {
+    mailgun: {
+      apiKey: optional("MAILGUN_API_KEY"),
+      domain: optional("MAILGUN_DOMAIN"),
+      // Only an EU-region domain needs this: https://api.eu.mailgun.net
+      url: optional("MAILGUN_URL", "https://api.mailgun.net"),
+    },
     host: optional("SMTP_HOST"),
     port: int("SMTP_PORT", 587),
     user: optional("SMTP_USER"),
     pass: optional("SMTP_PASS"),
-    from: optional("SMTP_FROM", "BioAudit <no-reply@bioaudit.app>"),
+    get provider() {
+      if (this.mailgun.apiKey) return "mailgun";
+      return this.host ? "smtp" : null;
+    },
+    // Providers reject or rewrite a From address the account does not own, and a
+    // mismatched sender is the quickest way into a university's spam folder. So Mailgun
+    // defaults to its own domain's postmaster, and SMTP to the account signed in as.
+    get from() {
+      if (this.provider === "mailgun") {
+        return (
+          optional("MAILGUN_FROM") ||
+          (this.mailgun.domain ? `BioAudit <postmaster@${this.mailgun.domain}>` : "")
+        );
+      }
+      return optional("SMTP_FROM") || (this.user.includes("@") ? `BioAudit <${this.user}>` : "");
+    },
     get enabled() {
-      return Boolean(this.host && this.user && this.pass);
+      // Never against the emulators. They hold test accounts at made-up addresses, and
+      // .env is loaded there too, so real mail would go out and bounce, which damages
+      // the sending account's reputation with its mail provider.
+      if (usingEmulators || !this.from) return false;
+      if (this.provider === "mailgun") return Boolean(this.mailgun.domain);
+      return Boolean(this.provider === "smtp" && this.user && this.pass);
+    },
+    /** Why sending is off, for the startup log; null when it is on or not attempted. */
+    get problem() {
+      if (usingEmulators || this.enabled || !this.provider) return null;
+      if (this.provider === "mailgun") {
+        return "MAILGUN_API_KEY is set but MAILGUN_DOMAIN is not. Set it to your Mailgun sending domain.";
+      }
+      if (!this.from) {
+        return 'SMTP_FROM is not set. Set it to the address to send from, e.g. "BioAudit <you@example.com>".';
+      }
+      return "SMTP_HOST, SMTP_USER and SMTP_PASS must all be set.";
+    },
+    /** For log lines: where mail goes out through. */
+    get via() {
+      return this.provider === "mailgun"
+        ? `Mailgun (${this.mailgun.domain})`
+        : `${this.host}:${this.port}`;
     },
   },
 
@@ -126,6 +172,18 @@ export const env = {
     // a mirror of Groq's own per-account quota -- the two are independent, and it is
     // possible to exhaust either one first.
     freeAiPerMonth: int("FREE_AI_MONTHLY_LIMIT", 20),
+  },
+
+  /**
+   * Free-plan eligibility. The usual university domain shapes (.ac.uk, .edu, .edu.xx,
+   * .ac.xx) are built in; this adds institutions that use something else. Each entry
+   * also covers its subdomains, so "uni.example" accepts "student.uni.example".
+   */
+  student: {
+    extraDomains: optional("STUDENT_EMAIL_DOMAINS")
+      .split(",")
+      .map((d) => d.trim().toLowerCase().replace(/^[@.]+/, ""))
+      .filter(Boolean),
   },
 
   /**
