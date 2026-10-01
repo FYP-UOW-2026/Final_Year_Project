@@ -6,7 +6,9 @@
  */
 import dotenv from "dotenv";
 
-dotenv.config();
+dotenv.config({
+  path: 'backend/.env'
+});
 
 function required(name) {
   const value = process.env[name];
@@ -34,6 +36,8 @@ const hasInlineCredentials =
   process.env.FIREBASE_PROJECT_ID &&
   process.env.FIREBASE_CLIENT_EMAIL &&
   process.env.FIREBASE_PRIVATE_KEY;
+  process.env.webApiKey=required("FIREBASE_WEB_API_KEY"),
+  process.env.storageBucket=optional("FIREBASE_STORAGE_BUCKET")
 
 /**
  * The Firebase emulators accept any caller, so credentials are neither needed nor
@@ -84,6 +88,21 @@ export const env = {
     webApiKey: required("FIREBASE_WEB_API_KEY"),
   },
 
+  gemini: {
+    apiKey: optional("GEMINI_API_KEY"),
+    // A pinned model rather than a "-latest" alias. The alias is steered by Google and
+    // can land on a pool that is overloaded, which shows up as calls hanging for a
+    // minute or more before returning 503 -- far past any sensible client timeout.
+    model: optional("GEMINI_MODEL", "gemini-3.5-flash"),
+    contextLimit: int("AI_GEMINI_CONTEXT_LIMIT", 1000000),
+    // Ceiling on a single attempt. Without one the SDK waits indefinitely, so an
+    // overloaded model stalls the request instead of failing and letting us retry.
+    timeoutMs: int("GEMINI_TIMEOUT_MS", 20000),
+    get enabled() {
+      return Boolean(this.apiKey);
+    },
+  },
+
   groq: {
     apiKey: optional("GROQ_API_KEY"),
     // gpt-oss-120b is one of Groq's current free-tier chat models (1,000 req/day,
@@ -100,6 +119,42 @@ export const env = {
     get enabled() {
       return Boolean(this.apiKey);
     },
+  },
+
+  ollama: {
+    baseUrl: optional("OLLAMA_BASE_URL", "http://localhost:11434"),
+    key: optional("OLLAMA_KEY"),
+    models: optional("OLLAMA_MODELS")
+      .split(",")
+      .map((m) => m.trim())
+      .filter(Boolean),
+    get enabled() {
+      return this.models.length > 0;
+    },
+  },
+
+  openai: {
+    apiKey: optional("OPENAI_API_KEY"),
+    models: optional("OPENAI_MODELS")
+      .split(",")
+      .map((m) => m.trim())
+      .filter(Boolean),
+    // Explicit opt-in, not just "a key happens to be present" -- matches the plan's rule
+    // that OpenAI is never preferred or even registered until deliberately turned on.
+    get enabled() {
+      return (
+        optional("OPENAI_ENABLED", "false") === "true" &&
+        Boolean(this.apiKey) &&
+        this.models.length > 0
+      );
+    },
+  },
+
+  ai: {
+    defaultProvider: optional("AI_DEFAULT_PROVIDER", "gemini"),
+    requestTimeoutMs: int("AI_REQUEST_TIMEOUT_MS", 20000),
+    maxProviderAttempts: int("AI_MAX_PROVIDER_ATTEMPTS", 3),
+    circuitBreakerMs: int("AI_CIRCUIT_BREAKER_MS", 60000),
   },
 
   /**
