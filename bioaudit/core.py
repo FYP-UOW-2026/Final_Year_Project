@@ -74,12 +74,14 @@ def build_scan_apk(apk: str, cfg: Config, on_progress=None, should_cancel=None) 
 
     report("Reading the app's settings")
     info = manifest.parse_apk(apk)
-    run = TestRun(package=info.package)
+    run = TestRun(package=info.package, app_version=info.version_name)
+    run.tests_performed.append("Reading the app's settings")
     for f in manifest.manifest_findings(info):
         run.add(f)
 
     guard()
     report("Scanning the app's code")
+    run.tests_performed.append("Scanning the app's code")
     for f in apk_analyzer.analyze_apk(apk):
         run.add(f)
 
@@ -105,7 +107,13 @@ def build_assess(package: str, apk: str | None, cfg: Config, adb: Adb | None = N
     if not adb.is_installed(package):
         raise AdbError(f"Package {package} is not installed on {serial}.")
 
-    run = TestRun(package=package, device_serial=serial)
+    run = TestRun(
+        package=package,
+        device_serial=serial,
+        device_model=adb.device_model(),
+        android_version=adb.android_version(),
+        app_version=adb.app_version_name(package),
+    )
 
     # With the APK on disk we get higher-fidelity exported-component data;
     # without it the IPC oracle can only work from the installed manifest.
@@ -113,12 +121,14 @@ def build_assess(package: str, apk: str | None, cfg: Config, adb: Adb | None = N
         from .static_analysis import apk_analyzer, manifest as mparse
         guard()
         report("Reading the app's settings")
+        run.tests_performed.append("Reading the app's settings")
         info = mparse.parse_apk(apk)
         for f in mparse.manifest_findings(info):
             run.add(f)
 
         guard()
         report("Scanning the app's code")
+        run.tests_performed.append("Scanning the app's code")
         for f in apk_analyzer.analyze_apk(apk):
             run.add(f)
     else:
@@ -126,21 +136,25 @@ def build_assess(package: str, apk: str | None, cfg: Config, adb: Adb | None = N
 
     guard()
     report("Trying to open the app's screens without logging in")
+    run.tests_performed.append("Trying to open the app's screens without logging in")
     for f in ipc_oracle.probe(adb, package, info):
         run.add(f)
 
     guard()
     report("Checking whether the app gives away answers to guesses")
+    run.tests_performed.append("Checking whether the app gives away answers to guesses")
     for f in response_oracle.probe(adb, package, info):
         run.add(f)
 
     guard()
     report("Reading the phone's log for leaked secrets")
+    run.tests_performed.append("Reading the phone's log for leaked secrets")
     for f in observers.scan_logcat(adb, package):
         run.add(f)
 
     guard()
     report("Checking the backup setting")
+    run.tests_performed.append("Checking the backup setting")
     for f in observers.check_allow_backup(adb, package, info):
         run.add(f)
 

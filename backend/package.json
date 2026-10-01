@@ -15,7 +15,8 @@
     "email:test": "node scripts/send-test-email.mjs",
     "dev:emulated": "firebase emulators:exec --project bioaudit-test --only auth,firestore \"node --env-file=.env.emulated src/server.js\"",
     "emulators": "firebase emulators:start --project bioaudit-test --only auth,firestore",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "stress:artillery": "artillery run tests/stress/explain.artillery.yml"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -30,7 +31,13 @@
     "nodemailer": "^9.0.5",
     "zod": "^3.23.8"
   },
+  "optionalDependencies": {
+    "@google/genai": "^0.14.0",
+    "@langchain/langgraph": "^1.4.12"
+  },
   "devDependencies": {
+    "artillery": "^2.0.21",
+    "artillery-plugin-expect": "^2.3.4",
     "eslint": "^9.9.0"
   }
 }

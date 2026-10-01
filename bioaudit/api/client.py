@@ -382,6 +382,7 @@ class ApiClient:
             "explanation": finding.explanation,
             "mitigation": finding.mitigation,
             "references": list(finding.references),
+            "attack_path": list(finding.attack_path),
         }
 
     def upload_run(self, run: TestRun, *, authorised: bool,
@@ -402,6 +403,13 @@ class ApiClient:
                 "packageName": run.package or None,
                 "apkFileName": apk_file_name,
                 "deviceSerial": run.device_serial,
+            },
+            "scope": {
+                "deviceModel": run.device_model,
+                "appVersion": run.app_version,
+                "androidVersion": run.android_version,
+                "loginState": run.login_state,
+                "testsPerformed": list(run.tests_performed),
             },
             "findings": [self._finding_to_payload(f) for f in run.ranked()],
             "toolVersion": tool_version,
