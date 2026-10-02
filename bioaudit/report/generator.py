@@ -14,7 +14,15 @@ _SEVERITY_COLORS = {
 }
 
 
-def render_html(run: TestRun) -> str:
+_DARK_CSS = (
+    "body,h1,h2,h3,p,li,em,strong,div,span{color:#ffffff}"
+    " .owasp,.conf,.evidence{color:#ffffff}"
+    " .pill,.sev{color:#ffffff}"
+)
+
+
+def render_html(run: TestRun, dark: bool = False) -> str:
+    """`dark=True` is for the dark on-screen viewer only; exported files stay light."""
     counts = run.counts()
     rows = []
     for f in run.ranked():
@@ -45,6 +53,7 @@ def render_html(run: TestRun) -> str:
  .owasp,.conf{{color:#666;font-size:.8rem;margin-left:.5rem}}
  .evidence{{margin-top:.5rem;font-size:.9rem;color:#444;word-break:break-word}}
  h1{{margin-bottom:.2rem}}
+ {_DARK_CSS if dark else ''}
 </style></head><body>
 <h1>BioAudit Security Report</h1>
 <p><strong>Package:</strong> {html.escape(run.package)}<br>
