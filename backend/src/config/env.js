@@ -4,10 +4,14 @@
  * Failing fast here is deliberate. A missing service account or web API key would
  * otherwise surface much later as a confusing runtime error on the first request.
  */
+import { fileURLToPath } from "node:url";
+
 import dotenv from "dotenv";
 
+// Resolved from this file rather than the working directory, so backend/.env is found
+// whether the server is started from the repo root or from inside backend/.
 dotenv.config({
-  path: 'backend/.env'
+  path: fileURLToPath(new URL("../../.env", import.meta.url)),
 });
 
 function required(name) {
