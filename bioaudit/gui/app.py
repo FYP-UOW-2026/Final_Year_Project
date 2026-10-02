@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import traceback
 from typing import Callable
 
@@ -166,6 +167,7 @@ def run(cfg: Config | None = None) -> int:
         btn = QPushButton()
         btn.setProperty("tileAccent", accent)
         btn.setCursor(Qt.PointingHandCursor)
+        btn.setFocusPolicy(Qt.NoFocus)  # no dotted focus rect over the gradient
         btn.setMinimumSize(220, 150)
 
         inner = QVBoxLayout(btn)
@@ -530,6 +532,7 @@ def run(cfg: Config | None = None) -> int:
 
             history_ok = 0 <= self.history_combo.currentIndex() < len(self._history_ids)
             self.history_save_report_btn.setEnabled(bool(self.api) and history_ok)
+            self.history_open_report_btn.setEnabled(bool(self.api) and history_ok)
             self.history_save_report_btn.setToolTip(tooltip)
 
         def _sign_in(self) -> None:
@@ -747,7 +750,7 @@ def run(cfg: Config | None = None) -> int:
             self._last_scan_id = sync_result.get("scan_id")
             self._update_save_report_buttons()
 
-            html = _sync_banner_html(sync_result) + generator.render_html(ctx["run"])
+            html = _sync_banner_html(sync_result) + generator.render_html(ctx["run"], dark=True)
             ctx["results_view"].setHtml(html)
             if retry_btn is not None:
                 retry_btn.setEnabled(True)
@@ -1272,6 +1275,9 @@ def run(cfg: Config | None = None) -> int:
             self.compare_btn = QPushButton("Compare two runs…")
             self.compare_btn.setEnabled(False)
             self.compare_btn.clicked.connect(self._compare_runs)
+            self.history_open_report_btn = QPushButton("Open full report")
+            self.history_open_report_btn.setEnabled(False)
+            self.history_open_report_btn.clicked.connect(self._open_history_report)
             self.history_save_report_btn = QPushButton("Save report from account")
             self.history_save_report_btn.setEnabled(False)
             self.history_save_report_btn.clicked.connect(self._save_history_report)
@@ -1280,6 +1286,7 @@ def run(cfg: Config | None = None) -> int:
             self.clear_history_btn = QPushButton("Clear all history")
             self.clear_history_btn.clicked.connect(self._clear_history)
             actions.addWidget(self.compare_btn)
+            actions.addWidget(self.history_open_report_btn)
             actions.addWidget(self.history_save_report_btn)
             actions.addStretch(1)
             actions.addWidget(self.delete_run_btn)
@@ -1616,7 +1623,7 @@ def run(cfg: Config | None = None) -> int:
 
             # Prepend the sync outcome so a failed upload is visible without hiding the
             # findings, which are the point of the run.
-            html = _sync_banner_html(sync) + generator.render_html(run_)
+            html = _sync_banner_html(sync) + generator.render_html(run_, dark=True)
             if ctx.get("retry_btn") is not None:
                 ctx["retry_btn"].setVisible(bool(sync.get("error")))
                 ctx["retry_btn"].setEnabled(True)
@@ -1901,6 +1908,29 @@ def run(cfg: Config | None = None) -> int:
                                     "Open it now?") == QMessageBox.Yes:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(path)))
 
+        def _open_history_report(self) -> None:
+            """Open the selected History run as a full (light) report in the browser.
+
+            Rendered from the server copy into a temp file; unlike _save_history_report
+            this is not premium-gated and does not ask where to save.
+            """
+            index = self.history_combo.currentIndex()
+            if self.api is None or not (0 <= index < len(self._history_ids)):
+                return
+            scan_id = self._history_ids[index]
+            try:
+                self.setCursor(Qt.WaitCursor)
+                html = _payload_to_html(self.api.get_scan(scan_id), dark=False)
+                path = os.path.join(tempfile.gettempdir(), f"bioaudit-{scan_id}.html")
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(html)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(self, "Could not open the report", str(exc))
+                return
+            finally:
+                self.setCursor(Qt.ArrowCursor)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
         def _open_last_report(self) -> None:
             if self._last_report_path and os.path.exists(self._last_report_path):
                 QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(self._last_report_path)))
@@ -2014,7 +2044,7 @@ def _sync_banner_html(sync: dict) -> str:
     """
     if sync.get("error"):
         return (
-            "<div style='background:#fce8e6;border-left:4px solid #d93025;"
+            "<div style='background:#5c1f1b;color:#ffffff;border-left:4px solid #d93025;"
             "padding:8px 12px;margin-bottom:12px'>"
             f"<b>Not saved to your account:</b> {_escape(sync['error'])}<br>"
             "This run is not stored anywhere yet — BioAudit does not keep a local copy. "
@@ -2023,14 +2053,14 @@ def _sync_banner_html(sync: dict) -> str:
         )
     if sync.get("message"):
         return (
-            "<div style='background:#e6f4ea;border-left:4px solid #188038;"
+            "<div style='background:#1d4a2c;color:#ffffff;border-left:4px solid #188038;"
             "padding:8px 12px;margin-bottom:12px'>"
             f"{_escape(sync['message'])}</div>"
         )
     return ""
 
 
-def _payload_to_html(payload: dict) -> str:
+def _payload_to_html(payload: dict, dark: bool = True) -> str:
     """Reconstruct a TestRun from a scan fetched from the server and render it via the
     report generator, so a history entry looks identical to a fresh result.
 
@@ -2065,7 +2095,7 @@ def _payload_to_html(payload: dict) -> str:
             mitigation=fd.get("mitigation"),
             references=fd.get("references", []),
         ))
-    return generator.render_html(run)
+    return generator.render_html(run, dark=dark)
 
 
 if __name__ == "__main__":
