@@ -11,6 +11,7 @@
  */
 import { auth, db } from "../config/firebase.js";
 import { COLLECTIONS, ROLES, TIERS } from "../constants/index.js";
+import * as studentVerification from "../services/studentVerification.service.js";
 import { ApiError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
@@ -79,6 +80,21 @@ export const requirePremium = asyncHandler(async (req, res, next) => {
     throw ApiError.paymentRequired(
       "This feature is part of the premium plan. Upgrade your account to use it."
     );
+  }
+  next();
+});
+
+/**
+ * Gate for the free plan's assessment features: a free personal account must have
+ * verified a university email first. Needs loadProfile, since the verification state
+ * is not carried in the token.
+ *
+ * Reading and deleting existing history is deliberately left ungated, so an account
+ * whose verification lapsed (say, after changing email) never loses sight of its data.
+ */
+export const requireVerifiedStudent = asyncHandler(async (req, res, next) => {
+  if (!studentVerification.isSatisfied(req.profile)) {
+    throw ApiError.forbidden(studentVerification.refusalMessage(req.profile));
   }
   next();
 });

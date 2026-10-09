@@ -26,11 +26,19 @@ process.env.FIREBASE_PRIVATE_KEY = privateKey.replace(/\n/g, "\\n");
 process.env.FIREBASE_WEB_API_KEY = "smoke-test-web-key";
 process.env.GROQ_API_KEY = "";
 process.env.FREE_HISTORY_LIMIT = "10";
+// Set (even empty) so dotenv leaves them alone: mail settings in backend/.env must never
+// let this offline test reach a real mail provider.
+process.env.MAILGUN_API_KEY = "";
+process.env.SMTP_HOST = "";
 
 const { createApp } = await import("../src/app.js");
 const { redact } = await import("../src/utils/redact.js");
 const { renderScanReportHtml } = await import("../src/services/report.service.js");
 const { compareScans } = await import("../src/services/scans.service.js");
+const { mailgunMessage, studentVerificationEmail } = await import(
+  "../src/services/email.service.js"
+);
+const { UNIVERSITIES } = await import("../src/data/universities.js");
 
 const app = createApp();
 const server = app.listen(0);
@@ -196,6 +204,84 @@ await check("renders a report and escapes markup in the evidence", () => {
 await check("says so plainly when a scan found nothing", () => {
   const html = renderScanReportHtml({ id: "s", type: "apk", counts: {}, findings: [] });
   assert.match(html, /No problems were found/);
+});
+
+console.log("\nStudent verification email");
+
+await check("the code is in the subject, the text and the HTML", () => {
+  const mail = studentVerificationEmail({
+    code: "048213",
+    expiresInMinutes: 15,
+    universityName: "National University of Singapore (NUS)",
+  });
+  assert.match(mail.subject, /^048213 /);
+  assert.match(mail.text, /048213/);
+  // The HTML puts a hair space between the digits for readability.
+  assert.ok(mail.html.replaceAll("&#8202;", "").includes("048213"));
+  assert.match(mail.text, /National University of Singapore/);
+  assert.match(mail.text, /15 minutes/);
+});
+
+await check("markup in a university name is escaped in the HTML", () => {
+  const mail = studentVerificationEmail({
+    code: "111111",
+    expiresInMinutes: 15,
+    universityName: "<script>alert(1)</script>",
+  });
+  assert.ok(!mail.html.includes("<script>"));
+  assert.match(mail.html, /&lt;script&gt;/);
+});
+
+await check("the Mailgun message carries both bodies and turns tracking off", () => {
+  const msg = mailgunMessage({
+    from: "BioAudit <postmaster@mg.example.com>",
+    to: "student@u.nus.edu",
+    subject: "048213 is your code",
+    text: "plain",
+    html: "<p>html</p>",
+  });
+  assert.deepEqual(msg.to, ["student@u.nus.edu"]);
+  assert.equal(msg.from, "BioAudit <postmaster@mg.example.com>");
+  assert.equal(msg.text, "plain");
+  assert.equal(msg.html, "<p>html</p>");
+  assert.equal(msg["o:tracking"], "no");
+});
+
+console.log("\nUniversity list");
+
+await check("every university has a unique id and well-formed domains", () => {
+  const ids = new Set();
+  for (const uni of UNIVERSITIES) {
+    assert.ok(!ids.has(uni.id), `duplicate id ${uni.id}`);
+    ids.add(uni.id);
+    assert.ok(uni.domains.length > 0, `${uni.id} has no domains`);
+    for (const d of uni.domains) {
+      assert.match(d, /^[a-z0-9-]+(\.[a-z0-9-]+)+$/, `${uni.id}: bad domain ${d}`);
+    }
+  }
+});
+
+await check("Singapore's universities and private institutions are listed", () => {
+  for (const id of ["nus", "ntu", "smu", "sutd", "sit", "suss", "sim", "sim-uow", "sim-uol",
+    "sim-rmit", "kaplan-sg", "psb"]) {
+    assert.ok(UNIVERSITIES.some((u) => u.id === id), `missing ${id}`);
+  }
+});
+
+await check("every current SIM Global Education partner is listed with the SIM domain", () => {
+  const partners = ["sim-uow", "sim-uol", "sim-rmit", "sim-ub", "sim-monash", "sim-usyd",
+    "sim-uob", "sim-cardiff", "sim-stirling", "sim-warwick", "sim-ualberta", "sim-gem"];
+  for (const id of partners) {
+    const uni = UNIVERSITIES.find((u) => u.id === id);
+    assert.ok(uni, `missing ${id}`);
+    assert.ok(uni.domains.includes("sim.edu.sg"), `${id} should accept @mymail.sim.edu.sg`);
+  }
+});
+
+await check("SIM partner students may use either their SIM or partner address", () => {
+  const simUow = UNIVERSITIES.find((u) => u.id === "sim-uow");
+  assert.ok(simUow.domains.includes("sim.edu.sg"));
+  assert.ok(simUow.domains.includes("uowmail.edu.au"));
 });
 
 server.close();

@@ -14,6 +14,7 @@ config/config.yaml
 reports/
 scratch/
 *.apk
+pytmpcache/
 
 # PyInstaller build artifacts
 build/
@@ -22,6 +23,9 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Node
+node_modules/
 
 # Claude
 CLAUDE.md

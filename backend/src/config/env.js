@@ -4,9 +4,15 @@
  * Failing fast here is deliberate. A missing service account or web API key would
  * otherwise surface much later as a confusing runtime error on the first request.
  */
+import { fileURLToPath } from "node:url";
+
 import dotenv from "dotenv";
 
-dotenv.config();
+// Resolved from this file rather than the working directory, so backend/.env is found
+// whether the server is started from the repo root or from inside backend/.
+dotenv.config({
+  path: fileURLToPath(new URL("../../.env", import.meta.url)),
+});
 
 function required(name) {
   const value = process.env[name];
@@ -34,6 +40,8 @@ const hasInlineCredentials =
   process.env.FIREBASE_PROJECT_ID &&
   process.env.FIREBASE_CLIENT_EMAIL &&
   process.env.FIREBASE_PRIVATE_KEY;
+  process.env.webApiKey=required("FIREBASE_WEB_API_KEY"),
+  process.env.storageBucket=optional("FIREBASE_STORAGE_BUCKET")
 
 /**
  * The Firebase emulators accept any caller, so credentials are neither needed nor
@@ -84,6 +92,21 @@ export const env = {
     webApiKey: required("FIREBASE_WEB_API_KEY"),
   },
 
+  gemini: {
+    apiKey: optional("GEMINI_API_KEY"),
+    // A pinned model rather than a "-latest" alias. The alias is steered by Google and
+    // can land on a pool that is overloaded, which shows up as calls hanging for a
+    // minute or more before returning 503 -- far past any sensible client timeout.
+    model: optional("GEMINI_MODEL", "gemini-3.5-flash"),
+    contextLimit: int("AI_GEMINI_CONTEXT_LIMIT", 1000000),
+    // Ceiling on a single attempt. Without one the SDK waits indefinitely, so an
+    // overloaded model stalls the request instead of failing and letting us retry.
+    timeoutMs: int("GEMINI_TIMEOUT_MS", 20000),
+    get enabled() {
+      return Boolean(this.apiKey);
+    },
+  },
+
   groq: {
     apiKey: optional("GROQ_API_KEY"),
     // gpt-oss-120b is one of Groq's current free-tier chat models (1,000 req/day,
@@ -102,20 +125,102 @@ export const env = {
     },
   },
 
+  ollama: {
+    baseUrl: optional("OLLAMA_BASE_URL", "http://localhost:11434"),
+    key: optional("OLLAMA_KEY"),
+    models: optional("OLLAMA_MODELS")
+      .split(",")
+      .map((m) => m.trim())
+      .filter(Boolean),
+    get enabled() {
+      return this.models.length > 0;
+    },
+  },
+
+  openai: {
+    apiKey: optional("OPENAI_API_KEY"),
+    models: optional("OPENAI_MODELS")
+      .split(",")
+      .map((m) => m.trim())
+      .filter(Boolean),
+    // Explicit opt-in, not just "a key happens to be present" -- matches the plan's rule
+    // that OpenAI is never preferred or even registered until deliberately turned on.
+    get enabled() {
+      return (
+        optional("OPENAI_ENABLED", "false") === "true" &&
+        Boolean(this.apiKey) &&
+        this.models.length > 0
+      );
+    },
+  },
+
+  ai: {
+    defaultProvider: optional("AI_DEFAULT_PROVIDER", "gemini"),
+    requestTimeoutMs: int("AI_REQUEST_TIMEOUT_MS", 20000),
+    maxProviderAttempts: int("AI_MAX_PROVIDER_ATTEMPTS", 3),
+    circuitBreakerMs: int("AI_CIRCUIT_BREAKER_MS", 60000),
+  },
+
   /**
-   * Outbound email. Optional in the same way the AI layer is: with no host configured
+   * Outbound email. Optional in the same way the AI layer is: with nothing configured
    * the app runs normally and simply does not send, so a developer running locally is
-   * never blocked by not having SMTP credentials. Nothing in the product depends on a
-   * message arriving -- an invitation token is shown on screen as well as emailed.
+   * never blocked by not having mail credentials. In production it is needed, because
+   * student verification codes are only ever delivered by email.
+   *
+   * Mailgun (MAILGUN_API_KEY + MAILGUN_DOMAIN) is used when configured; otherwise any
+   * SMTP provider works through SMTP_HOST, SMTP_USER and SMTP_PASS.
    */
   email: {
+    mailgun: {
+      apiKey: optional("MAILGUN_API_KEY"),
+      domain: optional("MAILGUN_DOMAIN"),
+      // Only an EU-region domain needs this: https://api.eu.mailgun.net
+      url: optional("MAILGUN_URL", "https://api.mailgun.net"),
+    },
     host: optional("SMTP_HOST"),
     port: int("SMTP_PORT", 587),
     user: optional("SMTP_USER"),
     pass: optional("SMTP_PASS"),
-    from: optional("SMTP_FROM", "BioAudit <no-reply@bioaudit.app>"),
+    get provider() {
+      if (this.mailgun.apiKey) return "mailgun";
+      return this.host ? "smtp" : null;
+    },
+    // Providers reject or rewrite a From address the account does not own, and a
+    // mismatched sender is the quickest way into a university's spam folder. So Mailgun
+    // defaults to its own domain's postmaster, and SMTP to the account signed in as.
+    get from() {
+      if (this.provider === "mailgun") {
+        return (
+          optional("MAILGUN_FROM") ||
+          (this.mailgun.domain ? `BioAudit <postmaster@${this.mailgun.domain}>` : "")
+        );
+      }
+      return optional("SMTP_FROM") || (this.user.includes("@") ? `BioAudit <${this.user}>` : "");
+    },
     get enabled() {
-      return Boolean(this.host && this.user && this.pass);
+      // Never against the emulators. They hold test accounts at made-up addresses, and
+      // .env is loaded there too, so real mail would go out and bounce, which damages
+      // the sending account's reputation with its mail provider.
+      if (usingEmulators || !this.from) return false;
+      if (this.provider === "mailgun") return Boolean(this.mailgun.domain);
+      return Boolean(this.provider === "smtp" && this.user && this.pass);
+    },
+    /** Why sending is off, for the startup log; null when it is on or not attempted. */
+    get problem() {
+      if (usingEmulators || this.enabled || !this.provider) return null;
+      if (this.provider === "mailgun") {
+        return "MAILGUN_API_KEY is set but MAILGUN_DOMAIN is not. Set it to your Mailgun sending domain.";
+      }
+      if (!this.from) {
+        return 'SMTP_FROM is not set. Set it to the address to send from, e.g. "BioAudit <you@example.com>".';
+      }
+      return "SMTP_HOST, SMTP_USER and SMTP_PASS must all be set.";
+    },
+    /** For log lines: where mail goes out through. */
+    get via() {
+      return this.provider === "mailgun"
+        ? `Mailgun (${this.mailgun.domain})`
+        : `${this.host}:${this.port}`;
     },
   },
 
@@ -126,6 +231,18 @@ export const env = {
     // a mirror of Groq's own per-account quota -- the two are independent, and it is
     // possible to exhaust either one first.
     freeAiPerMonth: int("FREE_AI_MONTHLY_LIMIT", 20),
+  },
+
+  /**
+   * Free-plan eligibility. The usual university domain shapes (.ac.uk, .edu, .edu.xx,
+   * .ac.xx) are built in; this adds institutions that use something else. Each entry
+   * also covers its subdomains, so "uni.example" accepts "student.uni.example".
+   */
+  student: {
+    extraDomains: optional("STUDENT_EMAIL_DOMAINS")
+      .split(",")
+      .map((d) => d.trim().toLowerCase().replace(/^[@.]+/, ""))
+      .filter(Boolean),
   },
 
   /**

@@ -24,9 +24,14 @@ process.env.FIREBASE_AUTH_EMULATOR_HOST = process.env.FIREBASE_AUTH_EMULATOR_HOS
 process.env.FIREBASE_WEB_API_KEY = "emulator-key";
 process.env.GROQ_API_KEY = "";
 process.env.FREE_HISTORY_LIMIT = "3"; // small, so retention is quick to prove
+// Every test registers and signs in from the same address, so the production auth
+// limit would start refusing partway through the run.
+process.env.AUTH_RATE_LIMIT_PER_15MIN = "1000";
 
 const { createApp } = await import("../src/app.js");
 const { db, auth } = await import("../src/config/firebase.js");
+const { hashCode } = await import("../src/services/studentVerification.service.js");
+const { COLLECTIONS } = await import("../src/constants/index.js");
 
 const app = createApp();
 const server = app.listen(0);
@@ -94,7 +99,8 @@ const unique = () => Math.random().toString(36).slice(2, 8);
 
 group("Registration and sign-in");
 
-const userEmail = `dev-${unique()}@example.com`;
+// A university address, since the free plan is for verified students.
+const userEmail = `dev-${unique()}@example.ac.uk`;
 const userPassword = "correct-horse-battery";
 let userToken;
 let userUid;
@@ -108,6 +114,10 @@ await check("registering creates the account and returns a usable session", asyn
   assert.equal(body.user.tier, "free");
   assert.equal(body.user.role, "member");
   assert.ok(body.session.idToken, "expected an idToken");
+  // A code is issued at registration for a free account at a university address.
+  assert.equal(body.user.studentVerification.status, "pending");
+  assert.equal(body.user.studentVerification.required, true);
+  assert.equal(body.user.studentVerification.eligible, true);
   userToken = body.session.idToken;
   userUid = body.user.id;
 });
@@ -173,6 +183,97 @@ await check("changing the password needs the current one", async () => {
     body: { currentPassword: "wrong", newPassword: "a-brand-new-password" },
   });
   assert.equal(status, 401, "a wrong current password should be refused");
+});
+
+// --- student verification -------------------------------------------------
+
+group("Student verification");
+
+/**
+ * The real code only ever leaves the server by email, so the test swaps a known code's
+ * hash into the stored record, which is what the emailed code would have matched.
+ */
+const KNOWN_CODE = "246810";
+async function plantKnownCode(uid) {
+  await db.collection("studentVerifications").doc(uid).update({ codeHash: hashCode(uid, KNOWN_CODE) });
+}
+
+const minimalScan = {
+  type: "device",
+  authorisationConfirmed: true,
+  target: { packageName: "com.example.app", deviceSerial: "emulator-1" },
+  findings: [],
+};
+
+await check("an unverified student cannot save a scan", async () => {
+  const { status, body } = await call("POST", "/scans", { token: userToken, body: minimalScan });
+  assert.equal(status, 403);
+  assert.match(body.error.message, /verify your university email/i);
+});
+
+await check("the code is never stored on the client-readable user document", async () => {
+  const profile = (await db.collection("users").doc(userUid).get()).data();
+  assert.ok(!JSON.stringify(profile).includes("codeHash"));
+});
+
+await check("asking for another code straight away is refused", async () => {
+  const { status } = await call("POST", "/users/me/student-verification/send", { token: userToken });
+  assert.equal(status, 429);
+});
+
+await check("a wrong code is refused and counted", async () => {
+  await plantKnownCode(userUid);
+  const { status } = await call("POST", "/users/me/student-verification/verify", {
+    token: userToken,
+    body: { code: "000000" },
+  });
+  assert.equal(status, 400);
+  const stored = await db.collection("studentVerifications").doc(userUid).get();
+  assert.equal(stored.data().attempts, 1);
+});
+
+await check("the right code verifies the account and unlocks scanning", async () => {
+  const { status, body } = await call("POST", "/users/me/student-verification/verify", {
+    token: userToken,
+    body: { code: KNOWN_CODE },
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.user.studentVerification.status, "verified");
+  const stored = await db.collection("studentVerifications").doc(userUid).get();
+  assert.ok(!stored.exists, "a used code should be deleted");
+  const record = await auth.getUser(userUid);
+  assert.equal(record.emailVerified, true);
+});
+
+await check("a code stops working after too many wrong guesses", async () => {
+  const email = `guesser-${unique()}@uni.ac.uk`;
+  const reg = await call("POST", "/auth/register", { body: { email, password: "guesser-password-1" } });
+  const token = reg.body.session.idToken;
+  await plantKnownCode(reg.body.user.id);
+  for (let i = 0; i < 5; i += 1) {
+    await call("POST", "/users/me/student-verification/verify", { token, body: { code: "111111" } });
+  }
+  const { status } = await call("POST", "/users/me/student-verification/verify", {
+    token,
+    body: { code: KNOWN_CODE },
+  });
+  assert.equal(status, 429, "the right code must not work once the attempts are used up");
+});
+
+await check("a free account without a university address is told the plan is for students", async () => {
+  const reg = await call("POST", "/auth/register", {
+    body: { email: `hobbyist-${unique()}@example.com`, password: "hobbyist-password-1" },
+  });
+  assert.equal(reg.status, 201);
+  assert.equal(reg.body.user.studentVerification.eligible, false);
+  const token = reg.body.session.idToken;
+
+  const send = await call("POST", "/users/me/student-verification/send", { token });
+  assert.equal(send.status, 400);
+
+  const scan = await call("POST", "/scans", { token, body: minimalScan });
+  assert.equal(scan.status, 403);
+  assert.match(scan.body.error.message, /free plan is for students/i);
 });
 
 // --- scans and history ----------------------------------------------------
@@ -355,6 +456,33 @@ await check("exporting a report returns HTML with the findings in it", async () 
   const html = await res.text();
   assert.match(html, /com\.compare\.app/);
   assert.match(html, /CRITICAL/);
+});
+
+await check("viewing a report inline does not persist a reports document", async () => {
+  const before = await db.collection(COLLECTIONS.REPORTS).where("scanId", "==", premiumScanB).get();
+  await fetch(`${BASE}/scans/${premiumScanB}/report`, {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  const after = await db.collection(COLLECTIONS.REPORTS).where("scanId", "==", premiumScanB).get();
+  assert.equal(after.size, before.size, "an inline view should not create a reports document");
+});
+
+await check("downloading a report saves it to the reports collection", async () => {
+  const res = await fetch(`${BASE}/scans/${premiumScanB}/report?download=true`, {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-disposition") || "", /attachment/);
+
+  // The save is fire-and-forget in the route, so give it a moment to land.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+
+  const snap = await db.collection(COLLECTIONS.REPORTS).where("scanId", "==", premiumScanB).get();
+  assert.ok(snap.size >= 1, "expected at least one saved report for this scan");
+  const doc = snap.docs[snap.docs.length - 1].data();
+  assert.equal(doc.format, "html");
+  assert.equal(doc.fileName, `bioaudit-${premiumScanB}.html`);
+  assert.match(doc.html, /com\.compare\.app/);
 });
 
 await check("cancelling the subscription drops back to free and warns about trimming", async () => {
@@ -627,11 +755,13 @@ await check("deleting a member account needs an explicit confirmation and a reas
 group("Account deletion");
 
 await check("deleting your own account removes your scan history with it", async () => {
-  const email = `throwaway-${unique()}@example.com`;
+  const email = `throwaway-${unique()}@example.ac.uk`;
   const password = "throwaway-password-1";
   const registered = await call("POST", "/auth/register", { body: { email, password } });
   const token = registered.body.session.idToken;
   const uid = registered.body.user.id;
+  await plantKnownCode(uid);
+  await call("POST", "/users/me/student-verification/verify", { token, body: { code: KNOWN_CODE } });
 
   await call("POST", "/scans", { token, body: scanPayload("com.throwaway.app", [sampleFinding]) });
 
@@ -646,6 +776,9 @@ await check("deleting your own account removes your scan history with it", async
 
   const after = await db.collection("scans").where("userId", "==", uid).get();
   assert.equal(after.size, 0, "their scans should have been deleted too");
+
+  const code = await db.collection("studentVerifications").doc(uid).get();
+  assert.ok(!code.exists);
 
   const profile = await db.collection("users").doc(uid).get();
   assert.ok(!profile.exists);

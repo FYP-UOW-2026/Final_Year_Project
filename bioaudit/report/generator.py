@@ -14,7 +14,15 @@ _SEVERITY_COLORS = {
 }
 
 
-def render_html(run: TestRun) -> str:
+_DARK_CSS = (
+    "body,h1,h2,h3,p,li,em,strong,div,span{color:#ffffff}"
+    " .owasp,.conf,.evidence{color:#ffffff}"
+    " .pill,.sev{color:#ffffff}"
+)
+
+
+def render_html(run: TestRun, dark: bool = False) -> str:
+    """`dark=True` is for the dark on-screen viewer only; exported files stay light."""
     counts = run.counts()
     rows = []
     for f in run.ranked():
@@ -28,6 +36,7 @@ def render_html(run: TestRun) -> str:
           <div class="evidence"><em>Evidence:</em> {html.escape(f.evidence)}</div>
           {_optional('Explanation', f.explanation)}
           {_optional('Mitigation', f.mitigation)}
+          {_render_attack_path(f)}
         </div>""")
 
     summary = " ".join(
@@ -44,11 +53,13 @@ def render_html(run: TestRun) -> str:
  .owasp,.conf{{color:#666;font-size:.8rem;margin-left:.5rem}}
  .evidence{{margin-top:.5rem;font-size:.9rem;color:#444;word-break:break-word}}
  h1{{margin-bottom:.2rem}}
+ {_DARK_CSS if dark else ''}
 </style></head><body>
 <h1>BioAudit Security Report</h1>
 <p><strong>Package:</strong> {html.escape(run.package)}<br>
 <strong>Generated:</strong> {datetime.now():%Y-%m-%d %H:%M}</p>
 <p>{summary}</p>
+{_render_scope(run)}
 <hr>
 {''.join(rows) or '<p>No findings.</p>'}
 </body></html>"""
@@ -77,3 +88,24 @@ def _optional(label: str, value) -> str:
     if not value:
         return ""
     return f'<div class="evidence"><em>{label}:</em> {html.escape(str(value))}</div>'
+
+
+def _render_scope(run: TestRun) -> str:
+    tests = "".join(f"<li>{html.escape(t)}</li>" for t in run.tests_performed)
+    return f"""
+    <div class="scope">
+      <h2>Test Scope</h2>
+      {_optional('Package', run.package)}
+      {_optional('Device model', run.device_model)}
+      {_optional('App version', run.app_version)}
+      {_optional('Android version', run.android_version)}
+      {_optional('Login state', run.login_state)}
+      {f'<div class="evidence"><em>Tests performed:</em><ul>{tests}</ul></div>' if tests else ''}
+    </div>"""
+
+
+def _render_attack_path(finding) -> str:
+    if not finding.attack_path:
+        return ""
+    steps = "".join(f"<li>{html.escape(step)}</li>" for step in finding.attack_path)
+    return f'<div class="evidence"><em>Attack path:</em><ol>{steps}</ol></div>'
