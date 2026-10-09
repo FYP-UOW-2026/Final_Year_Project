@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ..models import Finding, TestRun
+from ..redact import redact
 
 DEFAULT_BASE_URL = "http://127.0.0.1:4000/api"
 DEFAULT_TIMEOUT = 30.0
@@ -375,7 +376,8 @@ class ApiClient:
             "title": finding.title,
             "severity": finding.severity.name.lower(),
             "owasp": list(finding.owasp),
-            "evidence": finding.evidence,
+            # Redacted here because the server keeps it and org admins can read it.
+            "evidence": redact(finding.evidence),
             "source": finding.source,
             "confidence": finding.confidence,
             "component": finding.component,

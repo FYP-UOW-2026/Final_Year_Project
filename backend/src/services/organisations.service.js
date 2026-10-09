@@ -270,7 +270,10 @@ export async function flagScan({ orgId, scanId, reason, flaggedBy }) {
   if (!scanSnap.exists) throw ApiError.notFound("That scan does not exist.");
 
   const scan = scanSnap.data();
-  if (scan.organisationId !== orgId) {
+  // The owner must still be a member: a scan keeps the organisationId it was saved under
+  // after its owner is removed or leaves, and those scans are no longer the admin's.
+  const org = await getOrganisation(orgId);
+  if (scan.organisationId !== orgId || !org.memberIds.includes(scan.userId)) {
     throw ApiError.forbidden("That scan does not belong to your organisation.");
   }
 

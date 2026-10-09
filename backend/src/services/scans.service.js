@@ -13,6 +13,9 @@ import { ApiError } from "../utils/ApiError.js";
 const scans = () => db.collection(COLLECTIONS.SCANS);
 const reports = () => db.collection(COLLECTIONS.REPORTS);
 
+// Kept under Firestore's 500-writes-per-batch ceiling with room for a counter update.
+const BATCH_SIZE = 400;
+
 /** Count findings by severity so the history list does not have to load every finding. */
 function countBySeverity(findings) {
   const counts = Object.fromEntries(SEVERITIES.map((s) => [s, 0]));
@@ -36,11 +39,54 @@ async function enforceRetention(userId, tier) {
   const snap = await scans().where("userId", "==", userId).orderBy("createdAt", "desc").get();
   if (snap.size <= limit) return { removed: 0 };
 
+  // Chunked, since an account just downgraded from premium can be hundreds of scans over
+  // the limit and a single batch is capped at 500 writes. Each chunk also takes its own
+  // scans off scanCount, so the counter stays true even if a later chunk fails.
   const excess = snap.docs.slice(limit);
-  const batch = db.batch();
-  excess.forEach((doc) => batch.delete(doc.ref));
-  await batch.commit();
+  const userRef = db.collection(COLLECTIONS.USERS).doc(userId);
+  for (let i = 0; i < excess.length; i += BATCH_SIZE) {
+    const chunk = excess.slice(i, i + BATCH_SIZE);
+    const batch = db.batch();
+    chunk.forEach((doc) => batch.delete(doc.ref));
+    batch.update(userRef, { scanCount: FieldValue.increment(-chunk.length) });
+    await batch.commit();
+  }
+  await deleteReportsForScans(excess.map((doc) => doc.id));
   return { removed: excess.length };
+}
+
+/** Delete every document a query matches, in batches. */
+async function deleteAll(query) {
+  let removed = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const snap = await query.limit(BATCH_SIZE).get();
+    if (snap.empty) break;
+    const batch = db.batch();
+    snap.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+    removed += snap.size;
+    if (snap.size < BATCH_SIZE) break;
+  }
+  return removed;
+}
+
+/**
+ * Remove the saved report exports of these scans.
+ *
+ * An export holds the full report HTML, findings and evidence included, so a scan that
+ * is deleted without its exports has not really been deleted.
+ */
+async function deleteReportsForScans(scanIds) {
+  // Firestore limits an 'in' query to 30 values.
+  for (let i = 0; i < scanIds.length; i += 30) {
+    await deleteAll(reports().where("scanId", "in", scanIds.slice(i, i + 30)));
+  }
+}
+
+/** Remove every saved report export belonging to a user. */
+export async function deleteReportsForUser(userId) {
+  await deleteAll(reports().where("userId", "==", userId));
 }
 
 export async function createScan(user, payload) {
@@ -116,6 +162,10 @@ export async function getScan(scanId) {
  * A member sees only their own. An admin may also read a scan belonging to a member of
  * their organisation, which is what the Admin "View member data" function needs, and
  * that read is written to the audit log by the route that calls it.
+ *
+ * "A member" means a current one. A scan keeps the organisationId it was saved under, so
+ * without the membership check an admin could go on reading a person's history after
+ * removing them, or after they left.
  */
 export async function getScanForCaller(scanId, user) {
   const scan = await getScan(scanId);
@@ -125,12 +175,19 @@ export async function getScanForCaller(scanId, user) {
   const isAdminOfSameOrg =
     user.role === "admin" &&
     user.organisationId &&
-    scan.organisationId === user.organisationId;
+    scan.organisationId === user.organisationId &&
+    (await isCurrentMember(user.organisationId, scan.userId));
 
   if (!isAdminOfSameOrg) {
     throw ApiError.forbidden("You do not have access to that scan.");
   }
   return scan;
+}
+
+/** Whether a user is in an organisation's member list right now. */
+export async function isCurrentMember(organisationId, uid) {
+  const snap = await db.collection(COLLECTIONS.ORGANISATIONS).doc(organisationId).get();
+  return snap.exists && (snap.data().memberIds ?? []).includes(uid);
 }
 
 /** Persist an AI explanation onto the finding it belongs to. */
@@ -190,21 +247,13 @@ export async function deleteScan(scanId, userId) {
     .collection(COLLECTIONS.USERS)
     .doc(userId)
     .update({ scanCount: FieldValue.increment(-1) });
+  await deleteReportsForScans([scanId]);
 }
 
 /** Clear an entire history. Batched, since a heavy user can exceed one write batch. */
 export async function deleteAllScans(userId) {
-  let removed = 0;
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const snap = await scans().where("userId", "==", userId).limit(400).get();
-    if (snap.empty) break;
-    const batch = db.batch();
-    snap.docs.forEach((doc) => batch.delete(doc.ref));
-    await batch.commit();
-    removed += snap.size;
-    if (snap.size < 400) break;
-  }
+  const removed = await deleteAll(scans().where("userId", "==", userId));
+  await deleteReportsForUser(userId);
   await db.collection(COLLECTIONS.USERS).doc(userId).update({ scanCount: 0 });
   return removed;
 }
