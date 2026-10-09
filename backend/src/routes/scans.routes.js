@@ -268,7 +268,10 @@ router.get(
   requirePremium,
   validate({
     params: z.object({ scanId: z.string().min(1) }),
-    query: z.object({ download: z.coerce.boolean().default(false) }),
+    // Not z.coerce.boolean(): that turns any non-empty string, "false" included, into true.
+    query: z.object({
+      download: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+    }),
   }),
   asyncHandler(async (req, res) => {
     const scan = await scansService.getScanForCaller(req.params.scanId, req.user);
