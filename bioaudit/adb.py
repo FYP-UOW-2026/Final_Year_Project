@@ -140,3 +140,34 @@ class Adb:
     def dump_manifest(self, package: str) -> str:
         """Best-effort manifest dump for an installed app (no root)."""
         return self.shell("dumpsys", "package", package).stdout
+
+    def pull_base_apk(self, package: str, dest_dir: str) -> Optional[str]:
+        """Pull an installed app's base APK off the device (no root required).
+
+        `pm path` lists the on-device APK path(s); a user-installed app's base.apk
+        under /data/app is world-readable, so `adb pull` fetches it without root.
+        This is what lets `assess` build a real exported-component list (and read the
+        DEX) from just a package name, with no --apk supplied.
+
+        Returns the local path to the pulled APK, or None if the path could not be
+        found or the pull failed (e.g. a system app with a protected path).
+        """
+        res = self.shell("pm", "path", package)
+        remote = None
+        for line in res.stdout.splitlines():
+            line = line.strip()
+            if not line.startswith("package:"):
+                continue
+            path = line[len("package:"):].strip()
+            if path.endswith("base.apk"):
+                remote = path
+                break
+            if remote is None:
+                remote = path  # fall back to the first split if none is named base.apk
+        if not remote:
+            return None
+        local = os.path.join(dest_dir, "base.apk")
+        pulled = self.run("pull", remote, local)
+        if not pulled.ok or not os.path.isfile(local):
+            return None
+        return local

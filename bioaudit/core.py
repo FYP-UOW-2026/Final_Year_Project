@@ -107,22 +107,44 @@ def build_assess(package: str, apk: str | None, cfg: Config, adb: Adb | None = N
 
     run = TestRun(package=package, device_serial=serial)
 
-    # With the APK on disk we get higher-fidelity exported-component data;
-    # without it the IPC oracle can only work from the installed manifest.
-    if apk:
+    def _static_from_apk(apk_path: str) -> ManifestInfo:
+        """Manifest + code findings from an APK on disk. Shared by the supplied-APK
+        path and the pulled-from-device path, so both get identical fidelity."""
         from .static_analysis import apk_analyzer, manifest as mparse
         guard()
         report("Reading the app's settings")
-        info = mparse.parse_apk(apk)
-        for f in mparse.manifest_findings(info):
+        parsed = mparse.parse_apk(apk_path)
+        for f in mparse.manifest_findings(parsed):
             run.add(f)
 
         guard()
         report("Scanning the app's code")
-        for f in apk_analyzer.analyze_apk(apk):
+        for f in apk_analyzer.analyze_apk(apk_path):
             run.add(f)
+        return parsed
+
+    # The IPC and response oracles need the exported-component list, which lives in
+    # the manifest. A supplied APK is highest fidelity, but when none is given we
+    # pull the installed app's base APK off the device so these checks still run --
+    # only falling back to a bare manifest (component-blind) if that pull fails.
+    if apk:
+        info = _static_from_apk(apk)
     else:
-        info = ManifestInfo(package=package)
+        import shutil
+        import tempfile
+
+        guard()
+        report("Fetching the installed app from the device")
+        tmpdir = tempfile.mkdtemp(prefix="bioaudit-pull-")
+        try:
+            pulled = adb.pull_base_apk(package, tmpdir)
+            if pulled:
+                info = _static_from_apk(pulled)
+            else:
+                report("Could not read the installed app; probing with no manifest")
+                info = ManifestInfo(package=package)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     guard()
     report("Trying to open the app's screens without logging in")

@@ -146,8 +146,9 @@ def cmd_assess(args, cfg: Config) -> int:
         return 2
 
     if not args.apk:
-        print("Note: no --apk supplied; IPC oracle needs the exported-component list. "
-              "Provide --apk for the headline check.", file=sys.stderr)
+        print("Note: no --apk supplied; will pull the installed app off the device "
+              "to read its components. Pass --apk to skip the pull or test offline.",
+              file=sys.stderr)
 
     try:
         run = core.build_assess(args.package, args.apk, cfg)
