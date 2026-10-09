@@ -14,13 +14,18 @@
 import { Router } from "express";
 import { z } from "zod";
 
-import { db } from "../config/firebase.js";
 import { env } from "../config/env.js";
-import { COLLECTIONS, SCAN_TYPES, SEVERITIES, TIERS } from "../constants/index.js";
-import { denyAdmin, loadProfile, requireAuth, requirePremium } from "../middleware/auth.js";
+import { SCAN_TYPES, SEVERITIES, TIERS } from "../constants/index.js";
+import {
+  denyAdmin,
+  loadProfile,
+  requireAuth,
+  requirePremium,
+  requireVerifiedStudent,
+} from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import * as audit from "../services/audit.service.js";
-import * as groq from "../services/groq.service.js";
+import { createSession } from "../services/aiGraph.service.js";
 import * as scansService from "../services/scans.service.js";
 import * as usersService from "../services/users.service.js";
 import { renderScanReportHtml } from "../services/report.service.js";
@@ -44,6 +49,7 @@ const findingSchema = z.object({
   explanation: z.string().max(5000).nullish(),
   mitigation: z.string().max(5000).nullish(),
   references: z.array(z.string().max(500)).max(20).default([]),
+  attack_path: z.array(z.string().max(500)).max(20).default([]),
 });
 
 /**
@@ -55,6 +61,7 @@ const findingSchema = z.object({
 router.post(
   "/",
   denyAdmin,
+  requireVerifiedStudent,
   validate({
     body: z.object({
       type: z.enum([SCAN_TYPES.APK, SCAN_TYPES.DEVICE]),
@@ -63,6 +70,15 @@ router.post(
           packageName: z.string().trim().max(255).nullish(),
           apkFileName: z.string().trim().max(255).nullish(),
           deviceSerial: z.string().trim().max(120).nullish(),
+        })
+        .default({}),
+      scope: z
+        .object({
+          deviceModel: z.string().trim().max(120).nullish(),
+          appVersion: z.string().trim().max(120).nullish(),
+          androidVersion: z.string().trim().max(120).nullish(),
+          loginState: z.string().trim().max(300).nullish(),
+          testsPerformed: z.array(z.string().trim().max(200)).max(50).default([]),
         })
         .default({}),
       findings: z.array(findingSchema).max(500).default([]),
@@ -147,6 +163,7 @@ router.get(
  */
 router.post(
   "/:scanId/findings/:findingIndex/explain",
+  requireVerifiedStudent,
   validate({
     params: z.object({
       scanId: z.string().min(1),
@@ -163,8 +180,7 @@ router.post(
       throw ApiError.forbidden("You can only generate explanations for your own scans.");
     }
 
-    const findings = scan.findings ?? [];
-    const finding = findings[req.params.findingIndex];
+    const finding = (scan.findings ?? [])[req.params.findingIndex];
     if (!finding) throw ApiError.notFound("That finding does not exist in this scan.");
 
     // Reuse a stored explanation rather than paying for the same call twice. Deliberately
@@ -186,21 +202,24 @@ router.post(
 
     let result;
     try {
-      result = await groq.explainFinding(finding);
+      const session = createSession({ user: req.user, scanIds: [scan.id] });
+      const graphResult = await session.explain(
+        `Explain finding ${req.params.findingIndex} of scan ${scan.id}.`
+      );
+      result = { ...graphResult.result, model: graphResult.model };
     } catch (error) {
       await usersService.refundAiExplanation(req.user.uid, req.profile);
       throw error;
     }
 
-    findings[req.params.findingIndex] = {
-      ...finding,
-      explanation: result.explanation,
-      mitigation: result.mitigation,
-      references: result.references,
-    };
-    await db.collection(COLLECTIONS.SCANS).doc(scan.id).update({ findings });
+    const saved = await scansService.saveFindingExplanation(
+      scan.id,
+      req.user,
+      req.params.findingIndex,
+      result
+    );
 
-    res.json({ ...result, cached: false, quota });
+    res.json({ ...saved, model: result.model, cached: false, quota });
   })
 );
 
@@ -262,6 +281,15 @@ router.get(
 
     res.type("html");
     if (req.query.download) {
+      // Best-effort: a failed save never blocks the export the user actually asked for.
+      scansService
+        .saveReportExport(scan.id, req.user, {
+          format: "html",
+          fileName: `bioaudit-${scan.id}.html`,
+          html,
+        })
+        .catch((error) => console.error(`saveReportExport failed for ${scan.id}:`, error.message));
+
       res.setHeader("Content-Disposition", `attachment; filename="bioaudit-${scan.id}.html"`);
     }
     res.send(html);

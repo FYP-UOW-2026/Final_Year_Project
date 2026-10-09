@@ -15,6 +15,7 @@ from typing import Optional
 
 from ..api import Account, ApiClient, ApiClientError
 from ..session import clear_session, save_session
+from .register_form import make_register_form
 
 __all__ = [
     "account_summary", "clear_session", "save_session",
@@ -52,7 +53,9 @@ def show_signin_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
 
             self.tabs = QTabWidget()
             self.tabs.addTab(self._build_signin_tab(), "Sign in")
-            self.tabs.addTab(self._build_register_tab(), "Create account")
+            self.register_form = make_register_form(base_url)
+            self.register_form.set_return_action(self._submit)
+            self.tabs.addTab(self.register_form, "Create account")
             layout.addWidget(self.tabs)
 
             self.remember = QCheckBox("Keep me signed in on this computer")
@@ -86,36 +89,6 @@ def show_signin_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
             form.addRow("Password:", self.login_password)
             return w
 
-        def _build_register_tab(self) -> QWidget:
-            w = QWidget()
-            form = QFormLayout(w)
-            self.reg_name = QLineEdit()
-            self.reg_name.setPlaceholderText("Optional")
-            self.reg_email = QLineEdit()
-            self.reg_email.setPlaceholderText("you@example.com")
-            self.reg_password = QLineEdit()
-            self.reg_password.setEchoMode(QLineEdit.Password)
-            self.reg_password.setPlaceholderText("At least 8 characters")
-            self.reg_confirm = QLineEdit()
-            self.reg_confirm.setEchoMode(QLineEdit.Password)
-            self.reg_org = QLineEdit()
-            self.reg_org.setPlaceholderText("Leave blank unless you are setting up a team")
-
-            form.addRow("Name:", self.reg_name)
-            form.addRow("Email:", self.reg_email)
-            form.addRow("Password:", self.reg_password)
-            form.addRow("Confirm:", self.reg_confirm)
-            form.addRow("Organisation:", self.reg_org)
-
-            note = QLabel(
-                "Giving an organisation name creates a team account and makes you its "
-                "admin, so you can invite colleagues."
-            )
-            note.setWordWrap(True)
-            note.setStyleSheet("color: #5f6368; font-size: 11px;")
-            form.addRow("", note)
-            return w
-
         def _fail(self, message: str) -> None:
             self.status.setText(message)
             self._ok_button.setEnabled(True)
@@ -131,21 +104,9 @@ def show_signin_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
 
             try:
                 if registering:
-                    email = self.reg_email.text().strip()
-                    password = self.reg_password.text()
-                    if password != self.reg_confirm.text():
-                        return self._fail("Those passwords do not match.")
-                    if len(password) < 8:
-                        return self._fail("Use a password of at least 8 characters.")
-                    if not email:
-                        return self._fail("Enter an email address.")
-
-                    org = self.reg_org.text().strip()
-                    name = self.reg_name.text().strip() or None
-                    if org:
-                        client.register_admin(email, password, org, name)
-                    else:
-                        client.register(email, password, name)
+                    problem = self.register_form.submit(client)
+                    if problem:
+                        return self._fail(problem)
                 else:
                     email = self.login_email.text().strip()
                     password = self.login_password.text()
@@ -223,7 +184,9 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
             layout.addWidget(intro)
 
             self.tabs = QTabWidget()
-            self.tabs.addTab(self._build_create_tab(), "Create account")
+            self.register_form = make_register_form(base_url)
+            self.register_form.set_return_action(self._submit)
+            self.tabs.addTab(self.register_form, "Create account")
             self.tabs.addTab(self._build_join_tab(), "Join with an invite")
             self.tabs.addTab(self._build_signin_tab(), "Sign in")
             self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -252,36 +215,6 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
             layout.addLayout(bar)
 
         # ---- tabs --------------------------------------------------------- #
-
-        def _build_create_tab(self) -> QWidget:
-            w = QWidget()
-            form = QFormLayout(w)
-            self.reg_name = QLineEdit()
-            self.reg_name.setPlaceholderText("Optional")
-            self.reg_email = QLineEdit()
-            self.reg_email.setPlaceholderText("you@example.com")
-            self.reg_password = QLineEdit()
-            self.reg_password.setEchoMode(QLineEdit.Password)
-            self.reg_password.setPlaceholderText("At least 8 characters")
-            self.reg_confirm = QLineEdit()
-            self.reg_confirm.setEchoMode(QLineEdit.Password)
-            self.reg_confirm.returnPressed.connect(self._submit)
-            self.reg_org = QLineEdit()
-            self.reg_org.setPlaceholderText("Leave blank unless you are setting up a team")
-
-            form.addRow("Name:", self.reg_name)
-            form.addRow("Email:", self.reg_email)
-            form.addRow("Password:", self.reg_password)
-            form.addRow("Confirm:", self.reg_confirm)
-            form.addRow("Organisation:", self.reg_org)
-
-            note = QLabel(
-                "Giving an organisation name creates a team account and makes you its "
-                "admin, so you can invite colleagues.")
-            note.setWordWrap(True)
-            note.setObjectName("hint")
-            form.addRow("", note)
-            return w
 
         def _build_join_tab(self) -> QWidget:
             w = QWidget()
@@ -348,20 +281,9 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
 
             try:
                 if tab == CREATE:
-                    email = self.reg_email.text().strip()
-                    password = self.reg_password.text()
-                    if not email:
-                        return self._fail("Enter an email address.")
-                    if password != self.reg_confirm.text():
-                        return self._fail("Those passwords do not match.")
-                    if len(password) < 8:
-                        return self._fail("Use a password of at least 8 characters.")
-                    org = self.reg_org.text().strip()
-                    name = self.reg_name.text().strip() or None
-                    if org:
-                        client.register_admin(email, password, org, name)
-                    else:
-                        client.register(email, password, name)
+                    problem = self.register_form.submit(client)
+                    if problem:
+                        return self._fail(problem)
 
                 elif tab == JOIN:
                     email = self.join_email.text().strip()
@@ -423,4 +345,6 @@ def account_summary(account: Optional[Account]) -> str:
     parts.append("premium" if account.is_premium else "free")
     if account.is_admin:
         parts.append("admin")
+    if account.needs_student_verification:
+        parts.append("student email unverified")
     return "Signed in: " + " · ".join(parts)

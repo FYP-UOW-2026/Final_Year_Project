@@ -4,15 +4,20 @@
  * Diagram coverage (User):
  *   View profile, Update account details, Change email address,
  *   Change password, Delete account
+ * Free User: Verify student email
  */
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
+
+import { env } from "../config/env.js";
 
 import { loadProfile, requireAuth } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import * as email from "../services/email.service.js";
 import * as firebaseAuth from "../services/firebaseAuth.service.js";
 import * as organisations from "../services/organisations.service.js";
+import * as studentVerification from "../services/studentVerification.service.js";
 import * as usersService from "../services/users.service.js";
 import { ApiError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -67,11 +72,87 @@ router.post(
     }
 
     await firebaseAuth.verifyPassword(req.profile.email, req.body.currentPassword);
-    const updated = await usersService.changeEmail(req.user.uid, req.body.newEmail);
+    let updated = await usersService.changeEmail(req.user.uid, req.body.newEmail);
+
+    // A student moving to (or between) university addresses gets a code for the new one
+    // straight away, rather than having to go and ask for it.
+    const sent = await studentVerification.sendCodeIfDue(updated);
+    if (sent) updated = await usersService.getProfile(req.user.uid);
 
     res.json({
       user: usersService.toPublicProfile(updated),
-      message: "Email address updated. Verify the new address when prompted.",
+      message: sent
+        ? `Email address updated. Enter the verification code sent to ${updated.email}.`
+        : "Email address updated. Verify the new address when prompted.",
+    });
+  })
+);
+
+/**
+ * Codes are six digits, so the endpoints that issue and check them are limited as tightly
+ * as sign-in. The per-code attempt cap is the main defence; this bounds how often a fresh
+ * set of attempts can be bought by requesting a new code.
+ */
+const verificationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: env.rateLimits.authPer15Min,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.user.uid,
+  message: { error: { status: 429, message: "Too many attempts. Try again in a few minutes." } },
+});
+
+/** GET /api/users/me/student-verification -- where this account stands */
+router.get(
+  "/me/student-verification",
+  asyncHandler(async (req, res) => {
+    res.json({ studentVerification: studentVerification.statusFor(req.profile) });
+  })
+);
+
+/** POST /api/users/me/student-verification/send -- email a (new) code */
+router.post(
+  "/me/student-verification/send",
+  verificationLimiter,
+  validate({
+    // Optional: lets an account pick (or change) its university before the code goes
+    // out. null means "my university isn't listed".
+    body: z.object({ universityId: z.string().trim().min(1).max(60).nullable().optional() }).default({}),
+  }),
+  asyncHandler(async (req, res) => {
+    if (req.body.universityId !== undefined) {
+      await studentVerification.setUniversity(req.profile, req.body.universityId);
+    }
+    const { delivered, expiresInMinutes } = await studentVerification.sendCode(req.profile);
+    res.json({
+      message: delivered
+        ? `A verification code has been sent to ${req.profile.email}. It expires in ` +
+          `${expiresInMinutes} minutes.`
+        : "Email is not set up on this server, so the code was written to the server's " +
+          "log instead.",
+      delivered,
+    });
+  })
+);
+
+/** POST /api/users/me/student-verification/verify -- Verify student email */
+router.post(
+  "/me/student-verification/verify",
+  verificationLimiter,
+  validate({
+    body: z.object({
+      code: z
+        .string()
+        .trim()
+        .regex(/^\d{6}$/, "Enter the six-digit code from the email."),
+    }),
+  }),
+  asyncHandler(async (req, res) => {
+    await studentVerification.verifyCode(req.profile, req.body.code);
+    const updated = await usersService.getProfile(req.user.uid);
+    res.json({
+      user: usersService.toPublicProfile(updated),
+      message: "Your university email is verified. The free student plan is now unlocked.",
     });
   })
 );

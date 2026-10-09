@@ -27,12 +27,32 @@ service cloud.firestore {
         && request.auth.token.organisationId == orgId;
     }
 
-    // A user may read their own record. Writes go through the API only, so that tier and
-    // role cannot be raised by editing the document directly, which would otherwise be a
-    // straightforward way to grant yourself premium or admin.
+    // A user may read their own record. The website may create it once at sign-up, but
+    // only as a plain free/member account with their real login email. Tier and role can
+    // only be changed by the server, so nobody can grant themselves premium or admin.
     match /users/{userId} {
       allow read: if isOwner(userId);
-      allow write: if false;
+      allow create: if isOwner(userId)
+        && request.resource.data.keys().hasOnly([
+             'displayName', 'email', 'organisationId', 'organisationName',
+             'requestedPlan', 'role', 'scanCount', 'subscription', 'tier',
+             'disabled', 'createdAt', 'updatedAt'])
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() <= 80
+        && request.resource.data.requestedPlan in ['student', 'organisation']
+        && request.resource.data.tier == 'free'
+        && request.resource.data.role == 'member'
+        && request.resource.data.organisationId == null
+        && request.resource.data.scanCount == 0
+        && request.resource.data.disabled == false
+        && request.resource.data.subscription.keys().hasOnly(['status', 'startedAt', 'cancelledAt'])
+        && request.resource.data.subscription.status == 'none'
+        && request.resource.data.subscription.startedAt == null
+        && request.resource.data.subscription.cancelledAt == null
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update, delete: if false;
     }
 
     // Members may read their organisation. Only the API changes it.
@@ -45,6 +65,12 @@ service cloud.firestore {
     // goes through the API, which verifies the token and updates several documents in a
     // single transaction.
     match /invitations/{invitationId} {
+      allow read, write: if false;
+    }
+
+    // Student verification codes are only six digits, so even their hash must stay out of
+    // reach of the client: trying all million values would take seconds.
+    match /studentVerifications/{userId} {
       allow read, write: if false;
     }
 
@@ -65,6 +91,36 @@ service cloud.firestore {
     // through the API so the query can be scoped to their own organisation.
     match /auditLog/{entryId} {
       allow read, write: if false;
+    }
+
+    // ===== Stripe extension =====
+    // A user can start a checkout for themselves and see their own
+    // payments and subscriptions. Only the extension (server) writes the
+    // results, so a payment can't be faked from the browser.
+    match /customers/{uid} {
+      allow read: if isOwner(uid);
+
+      match /checkout_sessions/{id} {
+        allow read, create: if isOwner(uid);
+      }
+      match /subscriptions/{id} {
+        allow read: if isOwner(uid);
+      }
+      match /payments/{id} {
+        allow read: if isOwner(uid);
+      }
+    }
+
+    // The product and price list is public, so the plans page can show it.
+    match /products/{id} {
+      allow read: if true;
+
+      match /prices/{id} {
+        allow read: if true;
+      }
+      match /tax_rates/{id} {
+        allow read: if true;
+      }
     }
 
     // Anything not named above is denied, so a new collection is closed until rules for

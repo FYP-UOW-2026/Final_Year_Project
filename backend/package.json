@@ -12,9 +12,11 @@
     "dev": "node --watch src/server.js",
     "test": "node tests/smoke.mjs",
     "test:integration": "firebase emulators:exec --project bioaudit-test --only auth,firestore \"node tests/integration.mjs\"",
+    "email:test": "node scripts/send-test-email.mjs",
     "dev:emulated": "firebase emulators:exec --project bioaudit-test --only auth,firestore \"node --env-file=.env.emulated src/server.js\"",
     "emulators": "firebase emulators:start --project bioaudit-test --only auth,firestore",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "stress:artillery": "artillery run tests/stress/explain.artillery.yml"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -22,12 +24,20 @@
     "express": "^4.19.2",
     "express-rate-limit": "^7.4.0",
     "firebase-admin": "^12.4.0",
+    "form-data": "^4.0.6",
     "helmet": "^7.1.0",
+    "mailgun.js": "^11.1.0",
     "morgan": "^1.10.0",
     "nodemailer": "^9.0.5",
     "zod": "^3.23.8"
   },
+  "optionalDependencies": {
+    "@google/genai": "^0.14.0",
+    "@langchain/langgraph": "^1.4.12"
+  },
   "devDependencies": {
+    "artillery": "^2.0.21",
+    "artillery-plugin-expect": "^2.3.4",
     "eslint": "^9.9.0"
   }
 }

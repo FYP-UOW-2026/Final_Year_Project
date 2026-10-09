@@ -6,6 +6,7 @@ Commands:
   register --email E --password P         create an account (add --organisation to admin
                                            a team, or --join-token to join one from an invite)
   whoami                                  show who is currently signed in
+  verify-student [--code C] [--resend]    confirm a university email for the free plan
   scan-apk <apk>                          static analysis only (no device)
   assess  --package P --i-am-authorized   full black-box assessment on a device
   explain <scan-id>                       ask the server to explain a saved run's findings
@@ -96,7 +97,8 @@ def cmd_register(args, cfg: Config) -> int:
         if args.organisation:
             client.register_admin(args.email, password, args.organisation, args.name)
         else:
-            client.register(args.email, password, args.name)
+            client.register(args.email, password, args.name,
+                            university_id=args.university)
             if args.join_token:
                 # Joining revokes the session server-side so the new team permissions
                 # take effect, so a fresh sign-in follows, matching the GUI's join flow.
@@ -110,6 +112,13 @@ def cmd_register(args, cfg: Config) -> int:
         save_session(default_base_dir(), client)
     print(f"Registered and signed in as {client.account.email} ({client.account.tier}"
           f"{', admin' if client.account.is_admin else ''}).")
+    if client.account.needs_student_verification:
+        if client.account.student_verification.get("status") == "pending":
+            print(f"A six-digit code has been emailed to {client.account.email}. "
+                  "Enter it with `bioaudit verify-student` to unlock scanning.")
+        else:
+            print("The free plan needs a verified university email before you can scan. "
+                  "Run `bioaudit verify-student`.")
     return 0
 
 
@@ -121,7 +130,50 @@ def cmd_whoami(args, cfg: Config) -> int:
     account = client.account
     print(f"{account.email}  ·  {account.tier}"
           f"{'  ·  admin' if account.is_admin else ''}"
-          f"{'  ·  org ' + account.organisation_id if account.organisation_id else ''}")
+          f"{'  ·  org ' + account.organisation_id if account.organisation_id else ''}"
+          f"{'  ·  student email unverified' if account.needs_student_verification else ''}")
+    return 0
+
+
+def cmd_verify_student(args, cfg: Config) -> int:
+    """Confirm the account's university email with the code sent to it.
+
+    Mirrors the GUI's verification dialog. With no code waiting yet (or with --resend),
+    a new one is emailed first; then the code is taken from --code or prompted for.
+    """
+    if args.code and args.resend:
+        print("--code and --resend cannot be combined: a new code replaces the old one.",
+              file=sys.stderr)
+        return 2
+
+    client = _require_session(cfg)
+    if client is None:
+        return 2
+    account = client.account
+    sv = account.student_verification
+
+    if not account.needs_student_verification:
+        print("Your student email is already verified." if sv.get("status") == "verified"
+              else "This account does not need student verification.")
+        return 0
+    if not sv.get("eligible"):
+        university = (sv.get("university") or {}).get("name")
+        print(f"{account.email} is not {'a ' + university if university else 'a university'} "
+              "email address, so no code can be sent to it. The free plan is for students: "
+              "change your account email to your university address in the app, or upgrade "
+              "to premium.", file=sys.stderr)
+        return 1
+
+    try:
+        if args.resend or (not args.code and sv.get("status") != "pending"):
+            print(client.send_student_code())
+        code = args.code or input("Six-digit code from the email: ").strip()
+        client.verify_student_code(code)
+    except ApiClientError as exc:
+        print(f"Verification failed: {exc}", file=sys.stderr)
+        return 1
+
+    print("Your university email is verified. You can now scan.")
     return 0
 
 
@@ -287,10 +339,19 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--server", help="override the configured API server")
     r.add_argument("--no-remember", action="store_true",
                     help="do not save the session to disk (sign in for this command only)")
+    r.add_argument("--university", metavar="ID",
+                   help="your university's id from GET /api/universities; the email "
+                        "must be one it issues (students on the free plan)")
     r.set_defaults(func=cmd_register)
 
     w = sub.add_parser("whoami", help="show who is currently signed in")
     w.set_defaults(func=cmd_whoami)
+
+    v = sub.add_parser("verify-student",
+                       help="confirm your university email to unlock the free plan")
+    v.add_argument("--code", help="the six-digit code from the email (prompted if omitted)")
+    v.add_argument("--resend", action="store_true", help="email a new code first")
+    v.set_defaults(func=cmd_verify_student)
 
     s = sub.add_parser("scan-apk", help="static analysis of an APK (no device)")
     s.add_argument("apk")

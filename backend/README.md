@@ -166,9 +166,30 @@ All paths are prefixed with `/api`. Every endpoint except registration, login, a
 | POST | `/users/me/email` | User: Change email address |
 | POST | `/users/me/password` | User: Change password |
 | DELETE | `/users/me` | User: Delete account |
+| GET | `/users/me/student-verification` | Free User: student verification status |
+| POST | `/users/me/student-verification/send` | Free User: email a new verification code |
+| POST | `/users/me/student-verification/verify` | Free User: Verify student email |
 
 Changing an email address or password requires the current password as well as a valid session,
 since a stolen token alone should not be enough to take an account over.
+
+**Student verification.** The free plan is for students. A free personal account (not premium,
+not an admin, not in an organisation) must verify a university email before it can save a scan
+or request an AI explanation; viewing and deleting existing history stays open. `.ac.uk`, `.edu`,
+`.edu.xx` and `.ac.xx` domains are accepted, plus any listed in `STUDENT_EMAIL_DOMAINS`. A
+six-digit code is emailed on registration and on changing to a university address. It expires
+after 15 minutes, allows 5 attempts, and can be re-sent once a minute. Students pick their university
+from a searchable list (`GET /universities`, defined in `src/data/universities.js`), and the email must
+be one that university issues; "my university isn't listed" falls back to the domain check above.
+
+Codes are emailed through Mailgun (`MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `MAILGUN_FROM`), or any SMTP
+server as a fallback; see `.env.example`, and check the settings with `npm run email:test -- you@x.com`.
+Production sends from the verified domain `bioaudit.me` as `BioAudit <no-reply@bioaudit.me>`. A Mailgun
+sandbox domain only delivers to its authorized recipients and tends to land in spam, so use it for
+trying things out only. If a send fails, a student's existing code is kept and they are told why (a
+sandbox refusal gets its own message). With no mail provider configured outside production, the code is
+printed to the server log instead; in production, sending is refused with a 503. Email is always off
+against the Firebase emulators, so tests never send real mail.
 
 ### Scans and history
 
@@ -301,7 +322,8 @@ backend/
       users.service.js          accounts and custom claims
       organisations.service.js  membership, invitations, flag and review
       scans.service.js          history, retention, comparison
-      groq.service.js           AI explanations, with redaction
+      aiGraph.service.js        AI explanations, with redaction (the live path; see below)
+      groq.service.js           unused, left in place as reference for aiGraph.service.js
       report.service.js         HTML report rendering
       audit.service.js          append-only record of admin actions
     utils/
@@ -310,6 +332,43 @@ backend/
       asyncHandler.js      forwards async errors to the error handler
   firestore.rules          deny-by-default database rules
 ```
+
+## AI orchestration (LangGraph)
+
+`src/services/aiGraph.service.js` is a LangGraph rebuild of the explanation layer, wired in
+at `scans.routes.js` and `reports.routes.js` in place of the old single-shot
+`gemini.service.js`/`groq.service.js` calls, both left in the tree unused. It routes each
+call through `aiModelRouter.js`'s fallback chain (Gemini, then Groq, then any configured
+Ollama models, then OpenAI once enabled), trying the next provider when one fails outright.
+
+What it adds over a single-shot call: tool calls instead of one fixed prompt (the model
+asks for a finding's evidence, a scan's summary, guidance for a category, or a diff between
+two scans, rather than having everything handed to it up front), an output `responseSchema`
+per mode instead of prose-described JSON, and a one-shot repair loop for a malformed reply
+instead of a hard failure.
+
+```js
+import { createSession } from "./services/aiGraph.service.js";
+
+const session = createSession({
+  user: req.user,        // bound from the request, never model-supplied
+  scanIds: [scan.id],    // allowlist: a tool call naming any other scan is refused
+});
+
+const { result } = await session.explain(`Explain finding ${index} in scan ${scan.id}.`);
+// result: { explanation, mitigation, references } -- same shape gemini.service.js returns
+```
+
+Four modes: `explain` (one finding, matches today's endpoint), `synthesize` (a whole scan),
+`compare` (the diff between two scans, narrated), `report` (feeds a future export path).
+
+Every tool's return value passes through one egress guard before it can reach Gemini:
+redacted, capped (800 characters for evidence, 200 for labels), stripped to an explicit
+allowlist of keys. `compare_scans` drops evidence from both scans entirely — a diff needs
+categories, not two scans' worth of provider rows. This matters because a tool call's return
+is appended to the conversation and sent back to Gemini on the next turn regardless of which
+tool ran first, so the guard has to sit on every tool's output, not just the first one
+called.
 
 ## Connecting the desktop app
 

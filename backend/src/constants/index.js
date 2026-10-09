@@ -5,8 +5,10 @@ export const COLLECTIONS = {
   ORGANISATIONS: "organisations",
   INVITATIONS: "invitations",
   SCANS: "scans",
+  REPORTS: "reports",
   FLAGS: "flags",
   AUDIT: "auditLog",
+  STUDENT_VERIFICATIONS: "studentVerifications",
 };
 
 /** Billing tier. Controls which features a signed-in user may reach. */
@@ -19,6 +21,13 @@ export const TIERS = {
 export const ROLES = {
   MEMBER: "member",
   ADMIN: "admin",
+};
+
+/** Where a free account is in proving it belongs to a student. */
+export const STUDENT_STATUS = {
+  UNVERIFIED: "unverified",
+  PENDING: "pending",
+  VERIFIED: "verified",
 };
 
 export const SCAN_TYPES = {

@@ -7,6 +7,7 @@ component probing, logcat capture, screenshots, and backups.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -171,3 +172,16 @@ class Adb:
         if not pulled.ok or not os.path.isfile(local):
             return None
         return local
+
+    # --- device/app scope info --------------------------------------------
+
+    def device_model(self) -> str:
+        return self.shell("getprop", "ro.product.model").stdout.strip()
+
+    def android_version(self) -> str:
+        return self.shell("getprop", "ro.build.version.release").stdout.strip()
+
+    def app_version_name(self, package: str) -> Optional[str]:
+        """Best-effort versionName from the manifest dump (no root)."""
+        match = re.search(r"versionName=(\S+)", self.dump_manifest(package))
+        return match.group(1) if match else None

@@ -43,6 +43,15 @@ class FakeDevice:
     def is_installed(self, package: str) -> bool:
         return package == self.PKG
 
+    def device_model(self) -> str:
+        return "Pixel Test"
+
+    def android_version(self) -> str:
+        return "14"
+
+    def app_version_name(self, package: str):
+        return "1.0"
+
     def pull_base_apk(self, package: str, dest_dir: str):
         return self._apk if package == self.PKG else None
 

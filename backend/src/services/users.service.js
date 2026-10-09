@@ -8,8 +8,9 @@
  */
 import { auth, db, FieldValue } from "../config/firebase.js";
 import { env } from "../config/env.js";
-import { COLLECTIONS, ROLES, SUBSCRIPTION_STATUS, TIERS } from "../constants/index.js";
+import { COLLECTIONS, ROLES, STUDENT_STATUS, SUBSCRIPTION_STATUS, TIERS } from "../constants/index.js";
 import { ApiError } from "../utils/ApiError.js";
+import * as studentVerification from "./studentVerification.service.js";
 
 const users = () => db.collection(COLLECTIONS.USERS);
 
@@ -39,6 +40,7 @@ export async function createAccount({
   role = ROLES.MEMBER,
   organisationId = null,
   tier = TIERS.FREE,
+  universityId = null,
 }) {
   let userRecord;
   try {
@@ -64,6 +66,12 @@ export async function createAccount({
       status: tier === TIERS.PREMIUM ? SUBSCRIPTION_STATUS.ACTIVE : SUBSCRIPTION_STATUS.NONE,
       startedAt: tier === TIERS.PREMIUM ? FieldValue.serverTimestamp() : null,
       cancelledAt: null,
+    },
+    studentVerification: {
+      status: STUDENT_STATUS.UNVERIFIED,
+      email: null,
+      verifiedAt: null,
+      universityId,
     },
     scanCount: 0,
     createdAt: FieldValue.serverTimestamp(),
@@ -105,7 +113,18 @@ export async function changeEmail(uid, newEmail) {
     }
     throw error;
   }
-  await users().doc(uid).update({ email: newEmail, updatedAt: FieldValue.serverTimestamp() });
+  // Student verification belongs to the old address, so it lapses here. A code still
+  // waiting for the old address must not be usable to verify the new one either.
+  // The chosen university is kept: moving between addresses at the same university is
+  // the usual reason for a change.
+  await users().doc(uid).update({
+    email: newEmail,
+    "studentVerification.status": STUDENT_STATUS.UNVERIFIED,
+    "studentVerification.email": null,
+    "studentVerification.verifiedAt": null,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  await studentVerification.discardCode(uid);
   return getProfile(uid);
 }
 
@@ -290,6 +309,7 @@ export async function deleteAccount(uid) {
     if (snap.size < 400) break;
   }
 
+  await studentVerification.discardCode(uid);
   await users().doc(uid).delete();
   await auth.deleteUser(uid).catch((error) => {
     // A missing auth user is fine here: the record is gone either way.
@@ -310,6 +330,8 @@ export function toPublicProfile(profile) {
     // Included so a client can show the remaining allowance before spending it, rather
     // than only finding out at the point of refusal.
     aiQuota: aiQuotaFor(profile),
+    // The free plan is for students; this tells the client whether to ask for a code.
+    studentVerification: studentVerification.statusFor(profile),
     createdAt: profile.createdAt ?? null,
   };
 }
