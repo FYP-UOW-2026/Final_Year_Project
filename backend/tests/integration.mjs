@@ -359,6 +359,11 @@ await check("the free tier trims the oldest scan once past its limit", async () 
   assert.equal(gone.status, 404, "the oldest scan should have been removed");
 });
 
+await check("trimming takes the removed scans off the scan count", async () => {
+  const profile = await db.collection(COLLECTIONS.USERS).doc(userUid).get();
+  assert.equal(profile.data().scanCount, 3, "scanCount should match the 3 scans kept");
+});
+
 await check("comparing scans is refused on a free account", async () => {
   const { body: list } = await call("GET", "/scans", { token: userToken });
   const [a, b] = list.scans;
@@ -485,6 +490,39 @@ await check("downloading a report saves it to the reports collection", async () 
   assert.match(doc.html, /com\.compare\.app/);
 });
 
+await check("download=false shows the report inline and saves nothing", async () => {
+  const reportsFor = () =>
+    db.collection(COLLECTIONS.REPORTS).where("scanId", "==", premiumScanB).get();
+  const before = await reportsFor();
+  const res = await fetch(`${BASE}/scans/${premiumScanB}/report?download=false`, {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  assert.equal(res.status, 200);
+  assert.doesNotMatch(res.headers.get("content-disposition") || "", /attachment/);
+
+  // Same wait as the download test, so a stray save would have had time to land.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const after = await reportsFor();
+  assert.equal(after.size, before.size, "download=false must not save a report");
+});
+
+await check("an unrecognised download value is refused", async () => {
+  const { status } = await call("GET", `/scans/${premiumScanB}/report?download=yes`, {
+    token: userToken,
+  });
+  assert.equal(status, 400);
+});
+
+await check("deleting a scan also deletes its saved report exports", async () => {
+  const reportsFor = () =>
+    db.collection(COLLECTIONS.REPORTS).where("scanId", "==", premiumScanB).get();
+  assert.ok((await reportsFor()).size >= 1, "expected the export saved by the download test");
+
+  const { status } = await call("DELETE", `/scans/${premiumScanB}`, { token: userToken });
+  assert.equal(status, 200);
+  assert.equal((await reportsFor()).size, 0, "the scan's exports should be gone with it");
+});
+
 await check("cancelling the subscription drops back to free and warns about trimming", async () => {
   const { status, body } = await call("POST", "/subscription/cancel", {
     token: userToken,
@@ -494,6 +532,64 @@ await check("cancelling the subscription drops back to free and warns about trim
   assert.equal(body.user.tier, "free");
   assert.ok(body.warning, "expected a warning that history will be trimmed");
   assert.match(body.warning, /export anything you need first/);
+});
+
+await check("after a downgrade, trimming removes the trimmed scans' exports and fixes the count", async () => {
+  // Cancelling revoked the old token, so sign in again as the now-free account.
+  const relogin = await call("POST", "/auth/login", {
+    body: { email: userEmail, password: userPassword },
+  });
+  userToken = relogin.body.session.idToken;
+
+  // Plant an export for a scan that the trim below will remove. Exports can only be made
+  // on premium, which this account no longer is.
+  await db.collection(COLLECTIONS.REPORTS).add({
+    userId: userUid,
+    scanId: premiumScanA,
+    format: "html",
+    html: "<p>planted</p>",
+  });
+
+  // Three new scans leave premiumScanA outside the newest 3, along with every other
+  // older scan, so several are trimmed in one go.
+  for (let i = 0; i < 3; i += 1) {
+    const { status, body } = await call("POST", "/scans", {
+      token: userToken,
+      body: scanPayload(`com.downgraded.app${i}`, [sampleFinding]),
+    });
+    assert.equal(status, 201, JSON.stringify(body));
+  }
+
+  const scans = await db.collection(COLLECTIONS.SCANS).where("userId", "==", userUid).get();
+  assert.equal(scans.size, 3, "a free account should be trimmed back to 3 scans");
+
+  const gone = await db.collection(COLLECTIONS.SCANS).doc(premiumScanA).get();
+  assert.ok(!gone.exists, "premiumScanA should have been trimmed");
+  const exports = await db.collection(COLLECTIONS.REPORTS).where("scanId", "==", premiumScanA).get();
+  assert.equal(exports.size, 0, "a trimmed scan's exports should be removed too");
+
+  const profile = await db.collection(COLLECTIONS.USERS).doc(userUid).get();
+  assert.equal(profile.data().scanCount, scans.size, "scanCount should match the scans kept");
+});
+
+await check("clearing the whole history removes every report export too", async () => {
+  await db.collection(COLLECTIONS.REPORTS).add({
+    userId: userUid,
+    scanId: "some-scan",
+    format: "html",
+    html: "<p>planted</p>",
+  });
+
+  const { status, body } = await call("DELETE", "/scans", {
+    token: userToken,
+    body: { confirm: "DELETE_ALL" },
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+
+  const exports = await db.collection(COLLECTIONS.REPORTS).where("userId", "==", userUid).get();
+  assert.equal(exports.size, 0, "no export should outlive a cleared history");
+  const profile = await db.collection(COLLECTIONS.USERS).doc(userUid).get();
+  assert.equal(profile.data().scanCount, 0);
 });
 
 // --- organisations and admin ---------------------------------------------
@@ -691,6 +787,11 @@ await check("an admin can promote a member to admin", async () => {
   assert.equal(snap.data().role, "admin");
 });
 
+await check("an admin can open a current member's scan", async () => {
+  const { status, body } = await call("GET", `/scans/${memberScanId}`, { token: adminToken });
+  assert.equal(status, 200, JSON.stringify(body));
+});
+
 await check("removing a member leaves their account and scans intact", async () => {
   const { status } = await call("DELETE", `/organisations/${orgId}/members/${memberUid}`, {
     token: adminToken,
@@ -704,6 +805,21 @@ await check("removing a member leaves their account and scans intact", async () 
 
   const stillThere = await db.collection("scans").doc(memberScanId).get();
   assert.ok(stillThere.exists, "their scans should not have been deleted");
+});
+
+await check("after removal the admin can no longer read or flag that person's scans", async () => {
+  // The scan still carries this organisation's id, which used to be enough on its own.
+  const scan = await db.collection(COLLECTIONS.SCANS).doc(memberScanId).get();
+  assert.equal(scan.data().organisationId, orgId);
+
+  const read = await call("GET", `/scans/${memberScanId}`, { token: adminToken });
+  assert.equal(read.status, 403, "a removed member's scan must not be readable");
+
+  const flag = await call("POST", `/organisations/${orgId}/scans/${memberScanId}/flag`, {
+    token: adminToken,
+    body: { reason: "Should not be possible after removal" },
+  });
+  assert.equal(flag.status, 403, "a removed member's scan must not be flaggable");
 });
 
 await check("an admin cannot remove themselves", async () => {
@@ -763,7 +879,17 @@ await check("deleting your own account removes your scan history with it", async
   await plantKnownCode(uid);
   await call("POST", "/users/me/student-verification/verify", { token, body: { code: KNOWN_CODE } });
 
-  await call("POST", "/scans", { token, body: scanPayload("com.throwaway.app", [sampleFinding]) });
+  const saved = await call("POST", "/scans", {
+    token,
+    body: scanPayload("com.throwaway.app", [sampleFinding]),
+  });
+  // A free account cannot export, so the export is planted directly.
+  await db.collection(COLLECTIONS.REPORTS).add({
+    userId: uid,
+    scanId: saved.body.scan.id,
+    format: "html",
+    html: "<p>planted</p>",
+  });
 
   const before = await db.collection("scans").where("userId", "==", uid).get();
   assert.ok(before.size >= 1, "expected a scan to exist before deletion");
@@ -776,6 +902,9 @@ await check("deleting your own account removes your scan history with it", async
 
   const after = await db.collection("scans").where("userId", "==", uid).get();
   assert.equal(after.size, 0, "their scans should have been deleted too");
+
+  const exports = await db.collection(COLLECTIONS.REPORTS).where("userId", "==", uid).get();
+  assert.equal(exports.size, 0, "their report exports should have been deleted too");
 
   const code = await db.collection("studentVerifications").doc(uid).get();
   assert.ok(!code.exists);
