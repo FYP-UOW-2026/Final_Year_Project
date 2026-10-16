@@ -498,23 +498,13 @@ def run(cfg: Config | None = None) -> int:
 
             self.action_verify_student = QAction("Verify student email…", self)
             self.action_verify_student.setToolTip(
-                "The free plan is for students: verify your university email to run scans.")
+                "Personal accounts are for students: verify your university email to run scans.")
             self.action_verify_student.triggered.connect(self._verify_student)
             menu.addAction(self.action_verify_student)
 
             self.action_join_org = QAction("Join an organisation…", self)
             self.action_join_org.triggered.connect(self._join_organisation)
             menu.addAction(self.action_join_org)
-
-            menu.addSeparator()
-
-            self.action_upgrade = QAction("Upgrade to premium…", self)
-            self.action_upgrade.triggered.connect(self._upgrade)
-            menu.addAction(self.action_upgrade)
-
-            self.action_cancel_sub = QAction("Cancel subscription…", self)
-            self.action_cancel_sub.triggered.connect(self._cancel_subscription)
-            menu.addAction(self.action_cancel_sub)
 
         def _restore_saved_session(self) -> None:
             """Reuse a stored session if the user asked to stay signed in.
@@ -598,15 +588,13 @@ def run(cfg: Config | None = None) -> int:
             self.action_join_org.setEnabled(signed_in and not account.organisation_id)
             self.action_verify_student.setVisible(
                 signed_in and account.needs_student_verification)
-            self.action_upgrade.setEnabled(signed_in and not account.is_premium)
-            self.action_cancel_sub.setEnabled(signed_in and account.is_premium)
 
-            # Premium-only actions on the History tab.
-            self.compare_btn.setEnabled(signed_in and account.is_premium)
+            # Team-only actions on the History tab.
+            self.compare_btn.setEnabled(signed_in and account.is_team)
             self.compare_btn.setToolTip(
                 "Compare two saved runs to see what was fixed and what is new."
-                if signed_in and account.is_premium
-                else "Comparing runs is part of the premium plan.")
+                if signed_in and account.is_team
+                else "Comparing runs is for team accounts.")
             self._update_save_report_buttons()
 
             # An admin account is an oversight role: it supervises a team's assessments
@@ -656,19 +644,19 @@ def run(cfg: Config | None = None) -> int:
         def _update_save_report_buttons(self) -> None:
             """Single place the three "Save report from account" buttons get their state.
 
-            Enabled whenever there is a scan to save, regardless of plan -- a non-premium
+            Enabled whenever there is a scan to save, regardless of account -- a student's
             click is caught inside the handlers (_save_server_report / _save_history_report)
-            with an upgrade prompt, rather than left as a disabled control someone has to
+            with an explanation, rather than left as a disabled control someone has to
             guess the reason for. Called whenever the account might have changed
             (_refresh_account_ui) and whenever the History selection changes
             (_show_history_run), not just right after a job finishes -- otherwise a run
             saved while signed out stays showing a save button with nothing behind it.
             """
-            premium = bool(self.api and self.api.account and self.api.account.is_premium)
+            team = bool(self.api and self.api.account and self.api.account.is_team)
             tooltip = (
-                "Download this run's report from your account. Part of the premium plan."
-                if premium else
-                "Saving a report from your account is part of the premium plan.")
+                "Download this run's report from your account."
+                if team else
+                "Saving a report from your account is for team accounts.")
 
             for btn in (self.scan_save_report_btn, self.assess_save_report_btn):
                 btn.setEnabled(bool(self.api) and bool(self._last_scan_id))
@@ -730,27 +718,6 @@ def run(cfg: Config | None = None) -> int:
             # sign-in immediately rather than leaving buttons on screen that would fail.
             self._require_signed_in_or_quit()
 
-        def _upgrade(self) -> None:
-            if self.api is None:
-                return
-            confirm = QMessageBox.question(
-                self, "Upgrade to premium",
-                "Premium keeps your full scan history, and adds run comparison and "
-                "report export.\n\nThis demo build does not take payment, so the upgrade "
-                "is applied immediately.\n\nContinue?",
-            )
-            if confirm != QMessageBox.Yes:
-                return
-            try:
-                account = self.api.upgrade()
-            except Exception as exc:  # noqa: BLE001
-                QMessageBox.warning(self, "Upgrade failed", str(exc))
-                return
-            self._refresh_account_ui()
-            QMessageBox.information(
-                self, "Upgraded", f"Your account is now {account.tier}."
-            )
-
         def _open_account_settings(self) -> None:
             """Display name, email, password, and account deletion."""
             if self.api is None:
@@ -778,20 +745,11 @@ def run(cfg: Config | None = None) -> int:
             if result.signed_out:
                 self._force_sign_out(result.message)
 
-        def _cancel_subscription(self) -> None:
-            if self.api is None:
-                return
-            from .account_dialogs import confirm_cancel_subscription
-
-            result = confirm_cancel_subscription(self, self.api)
-            if result.signed_out:
-                self._force_sign_out(result.message)
-
         def _force_sign_out(self, message: str = "") -> None:
             """Drop the session locally after the server has already ended it.
 
             Used when an action revokes the session as a side effect, such as changing a
-            password or a tier. Calling logout() would only fail against a token the server
+            password or joining a team. Calling logout() would only fail against a token the server
             has already rejected.
             """
             from .signin import clear_session
@@ -807,16 +765,16 @@ def run(cfg: Config | None = None) -> int:
                 return
             try:
                 account = self.api.get_profile()
-                subscription = self.api.get_subscription()
+                # The history listing is where the server reports the account's limit.
+                limit = self.api.list_history(limit=1).get("historyLimit")
             except Exception as exc:  # noqa: BLE001
                 QMessageBox.warning(self, "Could not load account", str(exc))
                 return
 
-            limit = subscription["limits"]["historyLimit"]
             lines = [
                 f"<b>Email:</b> {account.email}",
                 f"<b>Name:</b> {account.display_name or 'not set'}",
-                f"<b>Plan:</b> {account.tier}",
+                f"<b>Account type:</b> {'team' if account.is_team else 'student'}",
                 f"<b>Role:</b> {account.role}",
                 f"<b>Student email:</b> {_student_status_text(account)}",
                 f"<b>Scans saved:</b> {account.scan_count}",
@@ -1065,7 +1023,7 @@ def run(cfg: Config | None = None) -> int:
             self.scan_save_report_btn = QPushButton("Save report from account")
             self.scan_save_report_btn.setEnabled(False)
             self.scan_save_report_btn.setToolTip(
-                "Download this run's report from your account. Part of the premium plan.")
+                "Download this run's report from your account. For team accounts.")
             self.scan_save_report_btn.clicked.connect(self._save_server_report)
             # Only shown while a run is going, so the row is not cluttered when idle.
             self.scan_cancel_btn = QPushButton("Cancel")
@@ -1262,7 +1220,7 @@ def run(cfg: Config | None = None) -> int:
             self.assess_save_report_btn = QPushButton("Save report from account")
             self.assess_save_report_btn.setEnabled(False)
             self.assess_save_report_btn.setToolTip(
-                "Download this run's report from your account. Part of the premium plan.")
+                "Download this run's report from your account. For team accounts.")
             self.assess_save_report_btn.clicked.connect(self._save_server_report)
             # Only shown while a run is going, so the row is not cluttered when idle.
             self.assess_cancel_btn = QPushButton("Cancel")
@@ -1519,7 +1477,7 @@ def run(cfg: Config | None = None) -> int:
                 lines = ["Run a scan or an assessment first.",
                          "Every finished run is saved to your account automatically."]
                 if limit is not None:
-                    lines.append(f"Your plan keeps the newest {limit} runs.")
+                    lines.append(f"A student account keeps the newest {limit} runs.")
                 self.history_results.setHtml(
                     theme.empty_state_html("No runs yet", lines, self.palette_colours))
 
@@ -1585,7 +1543,7 @@ def run(cfg: Config | None = None) -> int:
             self._reload_history()
 
         def _compare_runs(self) -> None:
-            """Premium. Compare two runs saved to the account.
+            """Team accounts. Compare two runs saved to the account.
 
             Uses the server's copies rather than the local database, because the comparison
             itself is a server feature and matching is done there by category and component.
@@ -1908,7 +1866,7 @@ def run(cfg: Config | None = None) -> int:
             moment the run finished, before any explanation exists — so once the server
             has them, they are copied back into that same run and both views are
             refreshed. Without this, the explanations would only ever be visible through
-            the server-backed "Save report from account" (premium-only) option.
+            the server-backed "Save report from account" (team-only) option.
             """
             checkbox = (ctx or {}).get("use_ai_checkbox")
             if checkbox is None or not checkbox.isChecked():
@@ -2002,26 +1960,27 @@ def run(cfg: Config | None = None) -> int:
             self._explain_thread = None
             self._explain_worker = None
 
-        def _prompt_premium_upgrade(self) -> bool:
-            """Offer to upgrade on the spot. Returns True if the caller should proceed.
+        def _team_only(self) -> bool:
+            """True on a team account; otherwise explain why not and return False.
 
-            Used by the save-report handlers, which stay clickable on a free account
+            Used by the save-report handlers, which stay clickable on a student account
             (see _update_save_report_buttons) rather than just disabled, so the reason
-            and the fix are in the same dialog instead of a tooltip someone has to find.
-            _upgrade() has its own Yes/No confirmation, so this does not ask twice.
+            and the way to get it are in the same dialog instead of a tooltip.
             """
+            if self.api and self.api.account and self.api.account.is_team:
+                return True
             QMessageBox.information(
-                self, "Premium feature",
-                "Saving a report from your account is part of the premium plan.")
-            self._upgrade()
-            return bool(self.api and self.api.account and self.api.account.is_premium)
+                self, "Team accounts only",
+                "Saving a report from your account is for team accounts.\n\n"
+                "To join a team, ask its admin for an invitation, then use "
+                "Account → Join an organisation…")
+            return False
 
         def _save_server_report(self) -> None:
-            """Premium. Download the report the server holds for the last saved run."""
+            """Team accounts. Download the report the server holds for the last saved run."""
             if self.api is None or not self._last_scan_id:
                 return
-            premium = bool(self.api.account and self.api.account.is_premium)
-            if not premium and not self._prompt_premium_upgrade():
+            if not self._team_only():
                 return
             path, _ = QFileDialog.getSaveFileName(
                 self, "Save report", f"bioaudit-{self._last_scan_id}.html",
@@ -2044,7 +2003,7 @@ def run(cfg: Config | None = None) -> int:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(path)))
 
         def _save_history_report(self) -> None:
-            """Premium. Download the report for whichever run is selected in History.
+            """Team accounts. Download the report for whichever run is selected in History.
 
             Separate from _save_server_report because that one is scoped to the run just
             finished this session (self._last_scan_id); this one saves an older run picked
@@ -2053,8 +2012,7 @@ def run(cfg: Config | None = None) -> int:
             index = self.history_combo.currentIndex()
             if self.api is None or not (0 <= index < len(self._history_ids)):
                 return
-            premium = bool(self.api.account and self.api.account.is_premium)
-            if not premium and not self._prompt_premium_upgrade():
+            if not self._team_only():
                 return
             scan_id = self._history_ids[index]
             path, _ = QFileDialog.getSaveFileName(
@@ -2081,7 +2039,7 @@ def run(cfg: Config | None = None) -> int:
             """Open the selected History run as a full (light) report in the browser.
 
             Rendered from the server copy into a temp file; unlike _save_history_report
-            this is not premium-gated and does not ask where to save.
+            this is not team-gated and does not ask where to save.
             """
             index = self.history_combo.currentIndex()
             if self.api is None or not (0 <= index < len(self._history_ids)):
@@ -2130,7 +2088,7 @@ def _student_status_text(account) -> str:
         university = (sv.get("university") or {}).get("name")
         return f"verified ({university})" if university else "verified"
     if not sv.get("eligible"):
-        return "not a university address (the free plan is for students)"
+        return "not a university address (personal accounts are for students)"
     return "not yet verified (Account menu, Verify student email)"
 
 

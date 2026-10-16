@@ -30,11 +30,6 @@ export class ApiError extends Error {
     return new ApiError(409, message);
   }
 
-  /** Used when a free account tries to reach a paid feature. */
-  static paymentRequired(message = "This feature requires a premium account.") {
-    return new ApiError(402, message);
-  }
-
   static tooManyRequests(message = "Too many requests. Try again shortly.") {
     return new ApiError(429, message);
   }

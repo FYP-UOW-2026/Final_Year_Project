@@ -84,7 +84,7 @@ def _verify_student(client: ApiClient) -> None:
 
 @pytest.fixture
 def signed_in(client: ApiClient) -> ApiClient:
-    """A free account that can use the free plan, which means a verified student."""
+    """A student account that can scan, which means a verified student."""
     client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1", "Pytest User")
     _verify_student(client)
     return client
@@ -123,8 +123,8 @@ def test_register_then_read_profile(client: ApiClient):
     account = client.register(email, "pytest-password-1", "Pytest User")
 
     assert account.email == email
-    assert account.tier == "free"
-    assert not account.is_premium
+    assert account.tier == "student"
+    assert not account.is_team
     assert client.signed_in
 
     fetched = client.get_profile()
@@ -191,7 +191,7 @@ def test_upload_run_and_read_it_back(signed_in: ApiClient):
 
     history = signed_in.list_history()
     assert len(history["scans"]) >= 1
-    assert history["tier"] == "free"
+    assert history["tier"] == "student"
 
     scan = signed_in.get_scan(result["scan"]["id"])
     categories = {f["category"] for f in scan["findings"]}
@@ -214,40 +214,46 @@ def test_severity_names_survive_the_round_trip(signed_in: ApiClient):
     assert all(s == s.lower() for s in severities), "severities should be lowercase"
 
 
-def test_free_tier_is_blocked_from_premium_features(signed_in: ApiClient):
+def test_student_is_blocked_from_team_features(signed_in: ApiClient):
     first = signed_in.upload_run(_sample_run("com.a"), authorised=True)
     second = signed_in.upload_run(_sample_run("com.a"), authorised=True)
 
     with pytest.raises(ApiClientError) as compare:
         signed_in.compare_scans(first["scan"]["id"], second["scan"]["id"])
-    assert compare.value.status == 402
+    assert compare.value.status == 403
 
     with pytest.raises(ApiClientError) as export:
         signed_in.export_report(first["scan"]["id"])
-    assert export.value.status == 402
+    assert export.value.status == 403
 
 
-def test_upgrade_then_compare_and_export(signed_in: ApiClient):
-    email = signed_in.account.email
-    account = signed_in.upgrade()
-    assert account.is_premium
+def test_team_member_can_compare_and_export(client: ApiClient):
+    _, organisation = client.register_admin(
+        f"pytest-admin-{_unique()}@example.com", "pytest-password-1", "Pytest Team")
+    member_email = f"pytest-member-{_unique()}@example.com"
+    invitation = client.invite_member(organisation["id"], member_email)
 
-    # Upgrading revokes sessions on the server, and the client refreshes through that
-    # automatically, so the next call should simply work.
-    baseline = signed_in.upload_run(_sample_run("com.compare"), authorised=True)
+    member = ApiClient(BASE_URL)
+    member.register(member_email, "pytest-password-1")
+    member.join_organisation(invitation["token"])
+    # Joining revokes the session so the new permissions take effect.
+    account = member.login(member_email, "pytest-password-1")
+    assert account.is_team
+    assert account.tier == "team"
+
+    baseline = member.upload_run(_sample_run("com.compare"), authorised=True)
 
     fixed = _sample_run("com.compare")
     fixed.findings = [f for f in fixed.findings if f.category != "logcat-leak"]
-    current = signed_in.upload_run(fixed, authorised=True)
+    current = member.upload_run(fixed, authorised=True)
 
-    comparison = signed_in.compare_scans(baseline["scan"]["id"], current["scan"]["id"])
+    comparison = member.compare_scans(baseline["scan"]["id"], current["scan"]["id"])
     assert comparison["summary"]["resolved"] == 1
     assert comparison["summary"]["unchanged"] == 1
 
-    html = signed_in.export_report(current["scan"]["id"])
+    html = member.export_report(current["scan"]["id"])
     assert "<!doctype html>" in html.lower()
     assert "com.compare" in html
-    assert email  # the account we started with is the one still signed in
 
 
 def test_delete_and_clear_history(signed_in: ApiClient):

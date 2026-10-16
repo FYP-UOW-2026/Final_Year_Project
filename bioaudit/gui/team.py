@@ -224,7 +224,7 @@ def make_team_tab(parent_window, palette: dict):
             layout = QVBoxLayout(w)
 
             self.members_table = _table(
-                ["Email", "Name", "Plan", "Role", "Scans", "Status"])
+                ["Email", "Name", "Role", "Scans", "Status"])
             self.members_table.itemSelectionChanged.connect(self._member_selection_changed)
             layout.addWidget(self.members_table, 1)
 
@@ -268,10 +268,10 @@ def make_team_tab(parent_window, palette: dict):
                 b.setEnabled(enabled)
 
             row = self.members_table.currentRow()
-            role = self.members_table.item(row, 3).text() if row >= 0 else ""
+            role = self.members_table.item(row, 2).text() if row >= 0 else ""
             self.make_admin_btn.setEnabled(enabled and role != "admin")
 
-            suspended = self.members_table.item(row, 5).text() == _SUSPENDED if row >= 0 else False
+            suspended = self.members_table.item(row, 4).text() == _SUSPENDED if row >= 0 else False
             self.suspend_btn.setEnabled(enabled)
             self.suspend_btn.setText("Reinstate" if suspended else "Suspend")
 
@@ -282,7 +282,6 @@ def make_team_tab(parent_window, palette: dict):
                 rows.append([
                     m.get("email", ""),
                     m.get("displayName") or "",
-                    m.get("tier", ""),
                     m.get("role", ""),
                     str(m.get("scanCount", 0)),
                     _SUSPENDED if m.get("disabled") else "active",
@@ -491,7 +490,7 @@ def make_team_tab(parent_window, palette: dict):
                 return
             row = self.members_table.currentRow()
             email = self.members_table.item(row, 0).text()
-            suspended_now = self.members_table.item(row, 5).text() == _SUSPENDED
+            suspended_now = self.members_table.item(row, 4).text() == _SUSPENDED
             suspend = not suspended_now
 
             if suspend:

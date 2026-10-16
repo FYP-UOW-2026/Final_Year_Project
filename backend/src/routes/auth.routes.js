@@ -12,7 +12,7 @@ import { z } from "zod";
 
 import { env } from "../config/env.js";
 import { auth } from "../config/firebase.js";
-import { ROLES, TIERS } from "../constants/index.js";
+import { ROLES } from "../constants/index.js";
 import { requireAuth } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import * as firebaseAuth from "../services/firebaseAuth.service.js";
@@ -45,10 +45,9 @@ const passwordSchema = z
 /**
  * POST /api/auth/register -- Register user account
  *
- * Anyone may register, because an organisation's invitee or a future premium customer
- * needs an account first too. A free personal account at a university address is sent a
- * verification code here; the free plan's assessment features stay locked until it is
- * entered (see requireVerifiedStudent).
+ * Anyone may register, because an organisation's invitee needs an account first too. A
+ * personal (student) account at a university address is sent a verification code here;
+ * its assessment features stay locked until it is entered (see requireVerifiedStudent).
  */
 router.post(
   "/register",
@@ -73,7 +72,6 @@ router.post(
       password: req.body.password,
       displayName: req.body.displayName,
       role: ROLES.MEMBER,
-      tier: TIERS.FREE,
       universityId: req.body.universityId ?? null,
     });
 
@@ -110,7 +108,6 @@ router.post(
       password: req.body.password,
       displayName: req.body.displayName,
       role: ROLES.ADMIN,
-      tier: TIERS.FREE,
     });
 
     const organisation = await organisations.createOrganisation({

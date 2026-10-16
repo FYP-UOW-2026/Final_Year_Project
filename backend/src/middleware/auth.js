@@ -4,13 +4,13 @@
  * The desktop app signs in once and then sends the Firebase ID token as a Bearer
  * header on every request. We verify that token here and attach the caller to req.user.
  *
- * Tier and role live in the token as custom claims, so the common path needs no
- * database read. They are refreshed on the token whenever they change (see
- * services/users.service.js), and any endpoint that must not act on a stale claim
- * reads the user document instead.
+ * Role and organisation live in the token as custom claims, so the common path needs no
+ * database read; the tier follows from the organisation. They are refreshed on the token
+ * whenever they change (see services/users.service.js), and any endpoint that must not
+ * act on a stale claim reads the user document instead.
  */
 import { auth, db } from "../config/firebase.js";
-import { COLLECTIONS, ROLES, TIERS } from "../constants/index.js";
+import { COLLECTIONS, ROLES, TIERS, tierFor } from "../constants/index.js";
 import * as studentVerification from "../services/studentVerification.service.js";
 import { ApiError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -48,10 +48,10 @@ export const requireAuth = asyncHandler(async (req, res, next) => {
     uid: decoded.uid,
     email: decoded.email || null,
     emailVerified: Boolean(decoded.email_verified),
-    tier: decoded.tier || TIERS.FREE,
     role: decoded.role || ROLES.MEMBER,
     organisationId: decoded.organisationId || null,
   };
+  req.user.tier = tierFor(req.user);
 
   next();
 });
@@ -68,17 +68,17 @@ export const loadProfile = asyncHandler(async (req, res, next) => {
   }
   req.profile = profile;
   // Claims can lag behind a change made moments ago, so prefer the stored values.
-  req.user.tier = profile.tier || req.user.tier;
   req.user.role = profile.role || req.user.role;
   req.user.organisationId = profile.organisationId ?? req.user.organisationId;
+  req.user.tier = tierFor(req.user);
   next();
 });
 
-/** Gate for paid features: Compare scan results, Export scan report, Cancel subscription. */
-export const requirePremium = asyncHandler(async (req, res, next) => {
-  if (req.user.tier !== TIERS.PREMIUM) {
-    throw ApiError.paymentRequired(
-      "This feature is part of the premium plan. Upgrade your account to use it."
+/** Gate for team-only features: Compare scan results, Export scan report. */
+export const requireTeam = asyncHandler(async (req, res, next) => {
+  if (req.user.tier !== TIERS.TEAM) {
+    throw ApiError.forbidden(
+      "This feature is for team accounts. Join a team with an invitation from its admin to use it."
     );
   }
   next();

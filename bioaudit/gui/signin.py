@@ -342,7 +342,7 @@ def account_summary(account: Optional[Account]) -> str:
     if account is None:
         return "Not signed in"
     parts = [account.email or account.id]
-    parts.append("premium" if account.is_premium else "free")
+    parts.append("team" if account.is_team else "student")
     if account.is_admin:
         parts.append("admin")
     if account.needs_student_verification:

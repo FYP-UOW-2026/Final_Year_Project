@@ -124,7 +124,7 @@ class Account:
             id=payload.get("id", ""),
             email=payload.get("email"),
             display_name=payload.get("displayName"),
-            tier=payload.get("tier", "free"),
+            tier=payload.get("tier", "student"),
             role=payload.get("role", "member"),
             organisation_id=payload.get("organisationId"),
             scan_count=int(payload.get("scanCount") or 0),
@@ -132,8 +132,13 @@ class Account:
         )
 
     @property
-    def is_premium(self) -> bool:
-        return self.tier == "premium"
+    def is_team(self) -> bool:
+        """On a team (admin or member): full history, compare, export, no AI cap.
+
+        Read from the organisation rather than the tier string, which is what the server
+        derives the tier from too, so the two cannot disagree.
+        """
+        return bool(self.organisation_id)
 
     @property
     def is_admin(self) -> bool:
@@ -143,15 +148,15 @@ class Account:
     def student_verification(self) -> dict:
         """The server's view of this account's student status.
 
-        Keys: status ("unverified" / "pending" / "verified"), required (whether the
-        free plan needs it on this account), eligible (whether the email is at a
+        Keys: status ("unverified" / "pending" / "verified"), required (whether this
+        account needs it before it can scan), eligible (whether the email is at a
         university domain).
         """
         return self.raw.get("studentVerification") or {}
 
     @property
     def needs_student_verification(self) -> bool:
-        """True while a free personal account is locked out of scanning until verified."""
+        """True while a student account is locked out of scanning until verified."""
         sv = self.student_verification
         return bool(sv.get("required")) and sv.get("status") != "verified"
 
@@ -452,13 +457,13 @@ class ApiClient:
         )
 
     def compare_scans(self, baseline_id: str, current_id: str) -> dict:
-        """Premium. Report what was resolved, introduced, or unchanged between two scans."""
+        """Team accounts. Report what was resolved, introduced, or unchanged between two scans."""
         return self._request(
             "GET", f"/scans/compare/results?baseline={baseline_id}&current={current_id}"
         )["comparison"]
 
     def export_report(self, scan_id: str) -> str:
-        """Premium. Return the report as HTML.
+        """Team accounts. Return the report as HTML.
 
         The server sends HTML rather than PDF so it needs no rendering engine. Pass the
         result to report/generator.py if a PDF is wanted, since this app already has one.
@@ -472,23 +477,6 @@ class ApiClient:
     def clear_history(self) -> int:
         data = self._request("DELETE", "/scans", body={"confirm": "DELETE_ALL"})
         return int(data.get("removed", 0))
-
-    # --- subscription -----------------------------------------------------
-
-    def get_subscription(self) -> dict:
-        return self._request("GET", "/subscription")
-
-    def upgrade(self) -> Account:
-        """Move to premium. Sessions are revoked, so this signs in again automatically."""
-        data = self._request("POST", "/subscription/upgrade", body={})
-        self.account = Account.from_payload(data["user"])
-        return self.account
-
-    def cancel_subscription(self, reason: Optional[str] = None) -> dict:
-        payload = {"confirm": "CANCEL"}
-        if reason:
-            payload["reason"] = reason
-        return self._request("POST", "/subscription/cancel", body=payload)
 
     # --- organisations ----------------------------------------------------
 

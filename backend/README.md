@@ -13,7 +13,7 @@ everything around it:
 |---|---|
 | Accounts, sign-in, sessions | Reading the APK's manifest and code |
 | Storing and serving scan history | Talking to the phone over ADB |
-| Enforcing free and premium limits | Deciding what counts as a finding |
+| Enforcing student and team limits | Deciding what counts as a finding |
 | Generating AI explanations | Converting an exported report to PDF |
 | Organisations, invitations, member oversight | |
 
@@ -71,7 +71,7 @@ credential format offline, which means it runs anywhere with no setup.
 **`npm run test:integration`** starts the auth and Firestore emulators, runs the full
 workflow against them, and shuts them down again. It needs Java 11 or newer, which the
 Firestore emulator requires. This covers what the offline suite cannot: real registration
-and sign-in, tier limits and history trimming, the premium features, and the whole
+and sign-in, tier limits and history trimming, the team-only features, and the whole
 organisation flow including invitations and the flag and review cycle.
 
 This suite has already earned its keep. It caught a response oracle in our own login
@@ -119,22 +119,27 @@ pick up the new permissions. Endpoints say so in their response when that applie
 
 ## Roles and tiers
 
-These are two separate things, which is worth keeping straight:
+There is no paid plan. An account's **tier** follows from whether it belongs to an
+organisation, and is never stored:
 
-- **Tier** is what the account paid for: `free` or `premium`. It gates features.
-- **Role** is the account's position in an organisation: `member` or `admin`. It gates
-  oversight of other people.
+- **`student`**: a personal account with no organisation. It must verify a university email,
+  keeps a limited history, and has a monthly cap on AI explanations.
+- **`team`**: any account in an organisation, member or admin. Everything is unlocked.
 
-An admin can be on either tier, and a premium user is not automatically an admin.
+**Role** is separate: the account's position in an organisation, `member` or `admin`. It gates
+oversight of other people. Admins oversee rather than scan, so they cannot save scans.
 
-| | Free | Premium | Admin |
+| | Student | Team member | Team admin |
 |---|---|---|---|
-| Scan an APK, assess a device | Yes | Yes | Yes |
-| View test history | Newest 10 | Unlimited | Own, plus members' summaries |
-| View AI explanation | Yes | Yes | Own scans only |
-| Compare scan results | No | Yes | If premium |
-| Export scan report | No | Yes | If premium |
+| Scan an APK, assess a device | Yes, once verified | Yes | No |
+| View test history | Newest 10 | Unlimited | Members' runs, from Team |
+| View AI explanation | Monthly cap | Unlimited | — |
+| Compare scan results | No | Yes | — |
+| Export scan report | No | Yes | — |
 | Manage organisation members | No | No | Yes |
+
+Leaving or being removed from an organisation makes an account a student again, and its next
+saved scan trims its history to the student limit.
 
 ## API reference
 
@@ -166,15 +171,15 @@ All paths are prefixed with `/api`. Every endpoint except registration, login, a
 | POST | `/users/me/email` | User: Change email address |
 | POST | `/users/me/password` | User: Change password |
 | DELETE | `/users/me` | User: Delete account |
-| GET | `/users/me/student-verification` | Free User: student verification status |
-| POST | `/users/me/student-verification/send` | Free User: email a new verification code |
-| POST | `/users/me/student-verification/verify` | Free User: Verify student email |
+| GET | `/users/me/student-verification` | Student: student verification status |
+| POST | `/users/me/student-verification/send` | Student: email a new verification code |
+| POST | `/users/me/student-verification/verify` | Student: Verify student email |
 
 Changing an email address or password requires the current password as well as a valid session,
 since a stolen token alone should not be enough to take an account over.
 
-**Student verification.** The free plan is for students. A free personal account (not premium,
-not an admin, not in an organisation) must verify a university email before it can save a scan
+**Student verification.** Personal accounts are for students. A student account (not an admin,
+not in an organisation) must verify a university email before it can save a scan
 or request an AI explanation; viewing and deleting existing history stays open. `.ac.uk`, `.edu`,
 `.edu.xx` and `.ac.xx` domains are accepted, plus any listed in `STUDENT_EMAIL_DOMAINS`. A
 six-digit code is emailed on registration and on changing to a university address. It expires
@@ -196,11 +201,11 @@ against the Firebase emulators, so tests never send real mail.
 | Method | Path | Diagram function |
 |---|---|---|
 | POST | `/scans` | User: Scan APK file, Assess connected device |
-| GET | `/scans` | Free and Premium: View test history |
+| GET | `/scans` | Student and Team: View test history |
 | GET | `/scans/:scanId` | One scan with all findings |
-| POST | `/scans/:scanId/findings/:index/explain` | Free and Premium: View AI explanation |
-| GET | `/scans/compare/results` | Premium: Compare scan results |
-| GET | `/scans/:scanId/report` | Premium: Export scan report |
+| POST | `/scans/:scanId/findings/:index/explain` | Student and Team: View AI explanation |
+| GET | `/scans/compare/results` | Team: Compare scan results |
+| GET | `/scans/:scanId/report` | Team: Export scan report |
 | DELETE | `/scans/:scanId` | User: Delete test history (one) |
 | DELETE | `/scans` | User: Delete test history (all) |
 
@@ -222,18 +227,6 @@ against the Firebase emulators, so tests never send real mail.
 | DELETE | `/organisations/:orgId/members/:uid` | Admin: Remove organisation member |
 | DELETE | `/organisations/:orgId/members/:uid/account` | Admin: Delete member account |
 | GET | `/organisations/:orgId/audit` | The record of admin actions |
-
-### Subscription
-
-| Method | Path | Diagram function |
-|---|---|---|
-| GET | `/subscription` | Current tier and limits |
-| POST | `/subscription/upgrade` | Move to premium |
-| POST | `/subscription/cancel` | Premium: Cancel subscription |
-
-Payment processing is **not** implemented. Taking card details needs a payment provider and its
-own compliance work, so `upgrade` records the tier change and marks where a provider such as
-Stripe would call in from its webhook.
 
 ## Example: saving a scan
 
@@ -266,8 +259,8 @@ never show an unconfirmed run against a live app.
 ## Data model
 
 ```
-users/{uid}                 email, displayName, tier, role, organisationId,
-                            subscription, scanCount, disabled
+users/{uid}                 email, displayName, role, organisationId,
+                            studentVerification, aiUsage, scanCount, disabled
 organisations/{orgId}       name, ownerId, adminIds[], memberIds[]
 invitations/{id}            organisationId, email, role, tokenHash, status, expiresAt
 scans/{id}                  userId, organisationId, type, target, findings[],
@@ -383,7 +376,7 @@ client = ApiClient("http://127.0.0.1:4000/api")
 
 try:
     account = client.login("dev@example.com", "password")
-    print(account.tier, account.is_premium)
+    print(account.tier, account.is_team)
 
     # run_ is a TestRun the local scanning engine produced
     result = client.upload_run(run_, authorised=True)
@@ -401,8 +394,8 @@ except ApiClientError as exc:
 ```
 
 The client refreshes an expired token and retries the request once, automatically. That
-matters because the server revokes sessions whenever a tier or role changes, so without it
-an upgrade would break the next call the user made.
+matters because the server revokes sessions whenever a role or organisation changes, so
+without it joining a team would break the next call the user made.
 
 CORS allows requests with no `Origin` header, which is what a desktop client sends. Browser
 front ends have to be listed in `CORS_ORIGINS`.

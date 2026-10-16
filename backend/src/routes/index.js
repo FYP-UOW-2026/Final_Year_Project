@@ -6,7 +6,6 @@ import { UNIVERSITIES } from "../data/universities.js";
 import authRoutes from "./auth.routes.js";
 import organisationRoutes from "./organisations.routes.js";
 import scanRoutes from "./scans.routes.js";
-import subscriptionRoutes from "./subscription.routes.js";
 import userRoutes from "./users.routes.js";
 
 const router = Router();
@@ -44,7 +43,6 @@ router.use("/auth", authRoutes);
 router.use("/users", userRoutes);
 router.use("/scans", scanRoutes);
 router.use("/organisations", organisationRoutes);
-router.use("/subscription", subscriptionRoutes);
 
 export default router;
 

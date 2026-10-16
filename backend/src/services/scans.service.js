@@ -3,7 +3,7 @@
  *
  * The scanning itself happens in the desktop app, because the APK file and the
  * USB-connected phone are both on the user's own machine. This service stores what the
- * app found, serves it back as history, and enforces the free tier's retention limit.
+ * app found, serves it back as history, and enforces a student account's retention limit.
  */
 import { db, FieldValue } from "../config/firebase.js";
 import { COLLECTIONS, SEVERITIES, TIERS } from "../constants/index.js";
@@ -24,13 +24,13 @@ function countBySeverity(findings) {
 }
 
 /**
- * Trim a free account back to its retention limit, oldest first.
+ * Trim a student account back to its retention limit, oldest first.
  *
  * Doing this on save rather than on read means the stored data always matches what the
- * user can see, so an upgrade does not suddenly reveal scans they thought were gone.
+ * user can see, so joining a team does not suddenly reveal scans they thought were gone.
  */
 async function enforceRetention(userId, tier) {
-  if (tier === TIERS.PREMIUM) return { removed: 0 };
+  if (tier === TIERS.TEAM) return { removed: 0 };
 
   const limit = env.limits.freeHistory;
   const snap = await scans().where("userId", "==", userId).orderBy("createdAt", "desc").get();
@@ -211,7 +211,7 @@ export async function deleteAllScans(userId) {
 }
 
 /**
- * Compare two scans of the same app. Premium only.
+ * Compare two scans of the same app. Team accounts only.
  *
  * Grouping by category and component rather than by the finding's id is what makes this
  * useful: the desktop app generates a fresh id per run, so matching on id would report

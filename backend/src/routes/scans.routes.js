@@ -3,8 +3,8 @@
  *
  * Diagram coverage:
  *   User          -> Scan APK file, Assess connected device, Delete test history
- *   Free User     -> View AI explanation, View test history
- *   Premium User  -> View AI explanation, View test history,
+ *   Student       -> View AI explanation (monthly cap), View test history (limited)
+ *   Team member   -> View AI explanation, View test history,
  *                    Compare scan results, Export scan report
  *
  * Note on where the work happens: the desktop app performs the scan on the user's own
@@ -20,7 +20,7 @@ import {
   denyAdmin,
   loadProfile,
   requireAuth,
-  requirePremium,
+  requireTeam,
   requireVerifiedStudent,
 } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
@@ -107,7 +107,7 @@ router.post(
   })
 );
 
-/** GET /api/scans -- View test history (free and premium) */
+/** GET /api/scans -- View test history (students and team members) */
 router.get(
   "/",
   validate({
@@ -121,7 +121,7 @@ router.get(
     res.json({
       scans,
       tier: req.user.tier,
-      historyLimit: req.user.tier === TIERS.PREMIUM ? null : env.limits.freeHistory,
+      historyLimit: req.user.tier === TIERS.TEAM ? null : env.limits.freeHistory,
     });
   })
 );
@@ -157,7 +157,7 @@ router.get(
 /**
  * POST /api/scans/:scanId/findings/:findingIndex/explain -- View AI explanation
  *
- * Available on both tiers. The finding is located by its position in the stored array,
+ * Available to students and team members. The finding is located by its position in the stored array,
  * since the desktop app's own finding ids are regenerated on each run and would not be
  * stable to address by.
  */
@@ -224,14 +224,14 @@ router.post(
 );
 
 /**
- * GET /api/scans/compare -- Compare scan results (premium)
+ * GET /api/scans/compare -- Compare scan results (team accounts)
  *
  * Registered before the parameterised delete route so "compare" is not mistaken for a
  * scan id.
  */
 router.get(
   "/compare/results",
-  requirePremium,
+  requireTeam,
   validate({
     query: z.object({
       baseline: z.string().min(1, "Provide the earlier scan id as 'baseline'."),
@@ -258,14 +258,14 @@ router.get(
 );
 
 /**
- * GET /api/scans/:scanId/report -- Export scan report (premium)
+ * GET /api/scans/:scanId/report -- Export scan report (team accounts)
  *
  * Returns HTML. The desktop app converts it to PDF locally, which avoids shipping a
  * rendering engine with this service.
  */
 router.get(
   "/:scanId/report",
-  requirePremium,
+  requireTeam,
   validate({
     params: z.object({ scanId: z.string().min(1) }),
     query: z.object({ download: z.coerce.boolean().default(false) }),
