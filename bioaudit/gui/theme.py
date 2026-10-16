@@ -5,8 +5,8 @@ be adjusted without touching behaviour.
 
 The look is a dark developer-tool style: slate surfaces, one green accent that means
 "run" or "the current selection", and flat cards with a single consistent treatment.
-Colours, fonts and the no-emoji-icons rule come from the ui-ux-pro-max design system for
-a security testing tool. Every text colour pair here was checked against WCAG AA: 4.5:1
+Colours, fonts and the no-emoji-icons rule were set in the UI redesign to suit a security
+testing tool. Every text colour pair here was checked against WCAG AA: 4.5:1
 for text, 3:1 for control borders and focus rings.
 """
 

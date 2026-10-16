@@ -27,11 +27,6 @@ Thumbs.db
 # Node
 node_modules/
 
-# Claude
-CLAUDE.md
-Claude.md
-claude.md
-
 # Extra
 BioAudit-Backend-QA.docx
 sample-vuln-app.apk.zip
