@@ -621,11 +621,20 @@ def run(cfg: Config | None = None) -> int:
             for index in own_runs_pages:
                 self.tabs.setTabVisible(index, not is_admin)
             # Mirror the same gate on the Home tab: the tiles that open those pages are
-            # removed entirely rather than left as a disabled dead end. Team stays put in
-            # its own grid cell (rather than stretching to fill the gap) so it keeps the
-            # same size as it has for a non-admin account.
+            # removed entirely rather than left as a disabled dead end. Team is then the
+            # only tile, so it moves to the top row and spans it instead of sitting alone
+            # in the bottom-right cell beside an empty gap.
             for tile in (self.home_scan_tile, self.home_assess_tile, self.home_history_tile):
                 tile.setVisible(not is_admin)
+            self.home_grid.removeWidget(self.home_team_tile)
+            if is_admin:
+                self.home_grid.addWidget(self.home_team_tile, 0, 0, 1, 2)
+            else:
+                self.home_grid.addWidget(self.home_team_tile, 1, 1)
+            self._page_info[0] = ("Home", "Oversee your team's members and their runs."
+                                  if is_admin else
+                                  "Pick a test to run, or open your past results.")
+            self._on_page_changed(self.tabs.currentIndex())
 
             # Team tools only make sense for an organisation admin -- hide the tab itself
             # for everyone else rather than showing it with a "not an admin" placeholder.
@@ -952,6 +961,7 @@ def run(cfg: Config | None = None) -> int:
             grid.addWidget(self.home_assess_tile, 0, 1)
             grid.addWidget(self.home_history_tile, 1, 0)
             grid.addWidget(self.home_team_tile, 1, 1)
+            self.home_grid = grid   # the Team tile moves within it for an admin
             layout.addLayout(grid)
 
             # What happens during a test, so a first-time user knows what they are
