@@ -269,8 +269,11 @@ export async function flagScan({ orgId, scanId, reason, flaggedBy }) {
   const scanSnap = await scanRef.get();
   if (!scanSnap.exists) throw ApiError.notFound("That scan does not exist.");
 
+  // Judged by current membership, not the organisationId stamped on the scan, so a run a
+  // member saved before joining can be flagged like any other (see getScanForCaller).
   const scan = scanSnap.data();
-  if (scan.organisationId !== orgId) {
+  const org = await getOrganisation(orgId);
+  if (!org.memberIds.includes(scan.userId)) {
     throw ApiError.forbidden("That scan does not belong to your organisation.");
   }
 

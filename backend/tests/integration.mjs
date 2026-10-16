@@ -629,6 +629,18 @@ await check("an admin sees a member's scan summaries but not their findings", as
   assert.ok(body.scans[0].counts, "but the counts should be visible");
 });
 
+await check("an admin can open a member's run, even one saved before they joined", async () => {
+  const opened = await call("GET", `/scans/${memberScanId}`, { token: adminToken });
+  assert.equal(opened.status, 200, JSON.stringify(opened.body));
+  assert.equal(opened.body.scan.findings.length, 1);
+
+  // A run saved before joining carries no organisation. It is listed for the admin, so
+  // it must open too; the flag checks below then run against this unstamped run.
+  await db.collection("scans").doc(memberScanId).update({ organisationId: null });
+  const preJoin = await call("GET", `/scans/${memberScanId}`, { token: adminToken });
+  assert.equal(preJoin.status, 200, JSON.stringify(preJoin.body));
+});
+
 await check("reading a member's data is written to the audit log", async () => {
   const { status, body } = await call("GET", `/organisations/${orgId}/audit`, {
     token: adminToken,
@@ -704,6 +716,9 @@ await check("removing a member leaves their account and scans intact", async () 
 
   const stillThere = await db.collection("scans").doc(memberScanId).get();
   assert.ok(stillThere.exists, "their scans should not have been deleted");
+
+  const opened = await call("GET", `/scans/${memberScanId}`, { token: adminToken });
+  assert.equal(opened.status, 403, "a removed member's runs are no longer the admin's to read");
 });
 
 await check("an admin cannot remove themselves", async () => {

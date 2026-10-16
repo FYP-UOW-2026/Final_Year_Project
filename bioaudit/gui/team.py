@@ -11,9 +11,10 @@ cursor rather than through the worker machinery the scans use. That keeps the co
 readable at the cost of a brief pause. The client's timeout bounds the worst case, so a
 dead server fails with a message instead of hanging forever.
 
-A note on privacy: the members view deliberately shows only that a member ran a scan and
-how many problems it found. The server does not return their findings to an admin, because
-the product promises an app's code never leaves the machine it was scanned on.
+A note on privacy: a member's run list shows only summaries, and an admin reads a run's
+findings by opening it on purpose. The server allows that only while the run's owner is a
+member of the admin's organisation and records every read in the activity log. Findings
+are evidence, not code: an app's code never leaves the machine it was scanned on.
 """
 
 from __future__ import annotations
