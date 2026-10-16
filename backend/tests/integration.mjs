@@ -650,6 +650,11 @@ await check("reading a member's data is written to the audit log", async () => {
   assert.ok(actions.includes("member.data_viewed"), `audit actions were: ${actions.join(", ")}`);
   assert.ok(actions.includes("member.invited"));
   assert.ok(actions.includes("member.joined"));
+
+  // Each entry names who acted and who it affected, by email rather than uid.
+  const viewed = body.entries.find((e) => e.action === "member.data_viewed");
+  assert.equal(viewed.actorEmail, adminEmail);
+  assert.equal(viewed.subjectEmail, "invitee@example.com");
 });
 
 let flagId;
