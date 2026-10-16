@@ -22,6 +22,7 @@ from ..adb import Adb
 from ..config import Config
 from ..models import TestRun
 from ..report import generator
+from .formatting import format_when, severity_summary
 
 
 def _require_pyside():
@@ -1321,16 +1322,11 @@ def run(cfg: Config | None = None) -> int:
                     data = self.api.list_history(limit=100)
                     limit = data.get("historyLimit")
                     for scan in data.get("scans", []):
-                        counts = scan.get("counts") or {}
-                        sev = " ".join(
-                            f"{name[0].upper()}{counts.get(name, 0)}"
-                            for name in ("critical", "high", "medium", "low", "info")
-                            if counts.get(name)
-                        ) or "no findings"
+                        sev = severity_summary(scan.get("counts") or {})
                         target = scan.get("target") or {}
                         label = target.get("packageName") or target.get("apkFileName") or "unknown"
-                        when = str(scan.get("createdAt", ""))[:19]
-                        self.history_combo.addItem(f"{when}  {label} — {sev}")
+                        when = format_when(scan.get("createdAt"))
+                        self.history_combo.addItem(f"{when}  ·  {label}  ·  {sev}")
                         self._history_ids.append(scan["id"])
                 except Exception as exc:  # noqa: BLE001
                     # Deliberately not the status bar: this can run right after a job
@@ -1445,7 +1441,7 @@ def run(cfg: Config | None = None) -> int:
             def describe(scan: dict) -> str:
                 target = scan.get("target") or {}
                 label = target.get("packageName") or target.get("apkFileName") or "unknown"
-                return f"{str(scan.get('createdAt', ''))[:19]}  {label}"
+                return f"{format_when(scan.get('createdAt'))}  ·  {label}"
 
             labels = [describe(s) for s in scans]
 
@@ -2001,9 +1997,9 @@ def _comparison_html(comparison: dict, palette: dict) -> str:
     <div style="font-family:'Segoe UI',Arial,sans-serif;padding:14px 18px">
       <h2 style="color:{palette['text']};font-size:14pt;margin:0 0 4px 0">Run comparison</h2>
       <p style="color:{palette['muted']};margin:0 0 14px 0">
-        Baseline {_escape(str(comparison['baseline'].get('createdAt', ''))[:19])}
+        Baseline {_escape(format_when(comparison['baseline'].get('createdAt')))}
         &nbsp;→&nbsp;
-        Current {_escape(str(comparison['current'].get('createdAt', ''))[:19])}
+        Current {_escape(format_when(comparison['current'].get('createdAt')))}
       </p>
       <p style="margin-bottom:16px">
         <span style="background:#188038;color:#fff;padding:2px 9px;border-radius:10px;
