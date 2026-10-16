@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Optional
 
 from ..api import ApiClient, ApiClientError
+from .formatting import format_when
 from .theme import SEVERITY_COLOURS
 
 # The Status cell's text for a blocked account. Named because it is both written into
@@ -34,7 +35,7 @@ def _run_labels(scans: list[dict]) -> list[str]:
     for s in scans:
         target = s.get("target") or {}
         name = target.get("packageName") or target.get("apkFileName") or "unknown"
-        labels.append(f"{str(s.get('createdAt', ''))[:19]}  {name}")
+        labels.append(f"{format_when(s.get('createdAt'))}  ·  {name}")
     return labels
 
 
@@ -312,7 +313,7 @@ def make_team_tab(parent_window, palette: dict):
                     f"{k[0].upper()}{v}" for k, v in counts.items() if v) or "no findings"
                 target = (s.get("target") or {})
                 label = target.get("packageName") or target.get("apkFileName") or "unknown"
-                when = str(s.get("createdAt", ""))[:19]
+                when = format_when(s.get("createdAt"))
                 lines.append(f"{when}   {label}   {summary}")
 
             dialog = QDialog(self)
@@ -383,7 +384,7 @@ def make_team_tab(parent_window, palette: dict):
             dialog.setMinimumSize(760, 560)
             dl = QVBoxLayout(dialog)
             note = QLabel(
-                f"<b>{label}</b> &nbsp; {str(full.get('createdAt', ''))[:19]}<br>"
+                f"<b>{label}</b> &nbsp; {format_when(full.get('createdAt'))}<br>"
                 f"<span style='color:{palette['muted']}'>Read-only. Opening this run has been "
                 f"recorded in the activity log.</span>")
             note.setTextFormat(Qt.RichText)
@@ -597,14 +598,11 @@ def make_team_tab(parent_window, palette: dict):
             invites = self.client.list_invitations(self.org_id, status="all")
             rows, keys = [], []
             for inv in invites:
-                expires = inv.get("expiresAt")
-                if isinstance(expires, dict):           # Firestore timestamp shape
-                    expires = expires.get("_seconds", "")
                 rows.append([
                     inv.get("email", ""),
                     inv.get("role", ""),
                     inv.get("status", ""),
-                    str(expires)[:19],
+                    format_when(inv.get("expiresAt")),
                 ])
                 keys.append(inv.get("id", ""))
             _fill(self.invitations_table, rows, keys)
@@ -760,10 +758,8 @@ def make_team_tab(parent_window, palette: dict):
             flags = self.client.list_flags(self.org_id, status=status)
             rows, keys = [], []
             for f in flags:
-                created = f.get("createdAt")
-                if isinstance(created, dict):
-                    created = created.get("_seconds", "")
-                rows.append([str(created)[:19], f.get("reason", ""), f.get("status", "")])
+                rows.append([format_when(f.get("createdAt")), f.get("reason", ""),
+                             f.get("status", "")])
                 keys.append(f.get("id", ""))
             _fill(self.flags_table, rows, keys)
             self._flag_selection_changed()
@@ -809,12 +805,9 @@ def make_team_tab(parent_window, palette: dict):
                 return    # the rest of the tab is still useful without it
             rows = []
             for e in entries:
-                at = e.get("at")
-                if isinstance(at, dict):
-                    at = at.get("_seconds", "")
                 meta = e.get("metadata") or {}
                 detail = ", ".join(f"{k}={v}" for k, v in meta.items() if v not in (None, ""))
-                rows.append([str(at)[:19], e.get("action", ""), detail])
+                rows.append([format_when(e.get("at")), e.get("action", ""), detail])
             _fill(self.audit_table, rows)
 
     return TeamTab()
