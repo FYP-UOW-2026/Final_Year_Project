@@ -1,22 +1,23 @@
 /**
  * Account records and the custom claims that go with them.
  *
- * Tier and role are written twice on purpose: into the Firestore user document, which
- * is the source of truth, and into the Firebase token as custom claims, which lets the
- * auth middleware check permissions without a database read on every request. Any
- * change to either has to update both, which is what setClaims exists for.
+ * Role and organisation are written twice on purpose: into the Firestore user document,
+ * which is the source of truth, and into the Firebase token as custom claims, which lets
+ * the auth middleware check permissions without a database read on every request. Any
+ * change to either has to update both, which is what setClaims exists for. The tier is
+ * not stored at all; it follows from the organisation (see tierFor).
  */
 import { auth, db, FieldValue } from "../config/firebase.js";
 import { env } from "../config/env.js";
-import { COLLECTIONS, ROLES, STUDENT_STATUS, SUBSCRIPTION_STATUS, TIERS } from "../constants/index.js";
+import { COLLECTIONS, ROLES, STUDENT_STATUS, TIERS, tierFor } from "../constants/index.js";
 import { ApiError } from "../utils/ApiError.js";
 import * as studentVerification from "./studentVerification.service.js";
 
 const users = () => db.collection(COLLECTIONS.USERS);
 
-/** Copy tier, role and organisation onto the user's token. */
-export async function setClaims(uid, { tier, role, organisationId }) {
-  await auth.setCustomUserClaims(uid, { tier, role, organisationId: organisationId ?? null });
+/** Copy role and organisation onto the user's token. */
+export async function setClaims(uid, { role, organisationId }) {
+  await auth.setCustomUserClaims(uid, { role, organisationId: organisationId ?? null });
   // Force the next request to present a token carrying the new claims.
   await auth.revokeRefreshTokens(uid);
 }
@@ -39,7 +40,6 @@ export async function createAccount({
   displayName,
   role = ROLES.MEMBER,
   organisationId = null,
-  tier = TIERS.FREE,
   universityId = null,
 }) {
   let userRecord;
@@ -58,15 +58,9 @@ export async function createAccount({
   const profile = {
     email,
     displayName: displayName || null,
-    tier,
     role,
     organisationId,
     disabled: false,
-    subscription: {
-      status: tier === TIERS.PREMIUM ? SUBSCRIPTION_STATUS.ACTIVE : SUBSCRIPTION_STATUS.NONE,
-      startedAt: tier === TIERS.PREMIUM ? FieldValue.serverTimestamp() : null,
-      cancelledAt: null,
-    },
     studentVerification: {
       status: STUDENT_STATUS.UNVERIFIED,
       email: null,
@@ -80,7 +74,7 @@ export async function createAccount({
 
   try {
     await users().doc(userRecord.uid).set(profile);
-    await setClaims(userRecord.uid, { tier, role, organisationId });
+    await setClaims(userRecord.uid, { role, organisationId });
   } catch (error) {
     await auth.deleteUser(userRecord.uid).catch(() => {});
     throw error;
@@ -157,27 +151,7 @@ export async function setOrganisation(uid, { organisationId, role }) {
     role: nextRole,
     updatedAt: FieldValue.serverTimestamp(),
   });
-  await setClaims(uid, { tier: profile.tier, role: nextRole, organisationId });
-  return getProfile(uid);
-}
-
-export async function setTier(uid, tier) {
-  const profile = await getProfile(uid);
-  const subscription =
-    tier === TIERS.PREMIUM
-      ? {
-          status: SUBSCRIPTION_STATUS.ACTIVE,
-          startedAt: FieldValue.serverTimestamp(),
-          cancelledAt: null,
-        }
-      : {
-          status: SUBSCRIPTION_STATUS.CANCELLED,
-          startedAt: profile.subscription?.startedAt ?? null,
-          cancelledAt: FieldValue.serverTimestamp(),
-        };
-
-  await users().doc(uid).update({ tier, subscription, updatedAt: FieldValue.serverTimestamp() });
-  await setClaims(uid, { tier, role: profile.role, organisationId: profile.organisationId });
+  await setClaims(uid, { role: nextRole, organisationId });
   return getProfile(uid);
 }
 
@@ -213,14 +187,14 @@ function currentQuotaMonth() {
 }
 
 /**
- * Report how many AI explanations a Free account has left this month.
+ * Report how many AI explanations a student account has left this month.
  *
  * Reads only, so the desktop app can show the remaining allowance without spending any
- * of it. Premium is uncapped and reports a null limit rather than a large number, so a
- * caller can tell "no limit" apart from "a big limit".
+ * of it. A team account is uncapped and reports a null limit rather than a large number,
+ * so a caller can tell "no limit" apart from "a big limit".
  */
 export function aiQuotaFor(profile) {
-  if (profile.tier === TIERS.PREMIUM) {
+  if (tierFor(profile) === TIERS.TEAM) {
     return { limit: null, used: 0, remaining: null, capped: false };
   }
   const limit = env.limits.freeAiPerMonth;
@@ -232,14 +206,14 @@ export function aiQuotaFor(profile) {
 }
 
 /**
- * Spend one AI explanation against a Free account's monthly allowance.
+ * Spend one AI explanation against a student account's monthly allowance.
  *
  * The read and the write are wrapped in a transaction so two explanations requested at
- * once cannot both see the same "one left" and take it. Premium accounts skip the
+ * once cannot both see the same "one left" and take it. Team accounts skip the
  * transaction entirely, since there is nothing to count.
  */
 export async function consumeAiExplanation(uid, profile) {
-  if (profile.tier === TIERS.PREMIUM) return { limit: null, used: 0, remaining: null };
+  if (tierFor(profile) === TIERS.TEAM) return { limit: null, used: 0, remaining: null };
 
   const limit = env.limits.freeAiPerMonth;
   const month = currentQuotaMonth();
@@ -253,7 +227,7 @@ export async function consumeAiExplanation(uid, profile) {
     if (used >= limit) {
       throw ApiError.forbidden(
         `You have used all ${limit} AI explanations included this month. ` +
-          "Upgrade to premium for unlimited explanations, or try again next month."
+          "Try again next month, or join a team for unlimited explanations."
       );
     }
 
@@ -269,12 +243,12 @@ export async function consumeAiExplanation(uid, profile) {
  * Give back an allowance spent on an explanation that never arrived.
  *
  * The AI service fails often enough in practice (rate limits, quota, transient 5xx) that
- * charging for a failed call would quietly eat a Free user's month. Only refunds within
+ * charging for a failed call would quietly eat a student's month. Only refunds within
  * the same month the charge was made, so a refund arriving after a rollover cannot push
  * the new month's counter negative.
  */
 export async function refundAiExplanation(uid, profile) {
-  if (profile.tier === TIERS.PREMIUM) return;
+  if (tierFor(profile) === TIERS.TEAM) return;
 
   const month = currentQuotaMonth();
   const ref = users().doc(uid);
@@ -322,10 +296,9 @@ export function toPublicProfile(profile) {
     id: profile.id,
     email: profile.email,
     displayName: profile.displayName,
-    tier: profile.tier,
+    tier: tierFor(profile),
     role: profile.role,
     organisationId: profile.organisationId,
-    subscription: profile.subscription,
     scanCount: profile.scanCount ?? 0,
     // Included so a client can show the remaining allowance before spending it, rather
     // than only finding out at the point of refusal.

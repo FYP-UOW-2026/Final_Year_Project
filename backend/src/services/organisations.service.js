@@ -61,7 +61,6 @@ export async function listMembers(orgId) {
         id: doc.id,
         email: data.email,
         displayName: data.displayName,
-        tier: data.tier,
         role: data.role,
         disabled: data.disabled ?? false,
         scanCount: data.scanCount ?? 0,
@@ -190,12 +189,10 @@ export async function acceptInvitation({ token, uid }) {
       organisationId: invitation.organisationId,
       organisationName: orgSnap.data().name,
       role: invitation.role,
-      tier: userSnap.data().tier,
     };
   });
 
   await setClaims(uid, {
-    tier: result.tier,
     role: result.role,
     organisationId: result.organisationId,
   });
@@ -216,9 +213,6 @@ export async function removeMember({ orgId, uid, actorId }) {
     throw ApiError.forbidden("The organisation owner cannot be removed.");
   }
 
-  const userSnap = await users().doc(uid).get();
-  const tier = userSnap.exists ? userSnap.data().tier : "free";
-
   await db.runTransaction(async (tx) => {
     tx.update(orgs().doc(orgId), {
       memberIds: FieldValue.arrayRemove(uid),
@@ -231,7 +225,7 @@ export async function removeMember({ orgId, uid, actorId }) {
     });
   });
 
-  await setClaims(uid, { tier, role: ROLES.MEMBER, organisationId: null });
+  await setClaims(uid, { role: ROLES.MEMBER, organisationId: null });
 }
 
 /** Promote an existing member to admin. */
@@ -253,7 +247,6 @@ export async function addAdmin({ orgId, uid }) {
   });
 
   await setClaims(uid, {
-    tier: userSnap.data().tier,
     role: ROLES.ADMIN,
     organisationId: orgId,
   });

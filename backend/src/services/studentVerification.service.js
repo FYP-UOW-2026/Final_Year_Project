@@ -1,14 +1,13 @@
 /**
- * Student email verification for the free plan.
+ * Student email verification for personal accounts.
  *
- * The free plan exists for students, so a free personal account has to prove it belongs
- * to one before it can run assessments. The proof is the usual one: the account's email
+ * A personal account exists for students, so it has to prove it belongs to one before
+ * it can run assessments. The proof is the usual one: the account's email
  * address is at a university domain, and its owner can read mail sent there. We email a
  * six-digit code and the owner types it into the desktop app.
  *
  * Who this applies to:
- *   * Free members with no organisation. These are the accounts the free plan is for.
- *   * Not premium accounts, which are paying and need no eligibility check.
+ *   * Personal accounts with no organisation. These are the student accounts.
  *   * Not admins, who do not run assessments at all (see denyAdmin).
  *   * Not organisation members, whose access is sponsored by their organisation and who
  *     were invited at whatever address the organisation uses, academic or not.
@@ -22,7 +21,7 @@ import crypto from "node:crypto";
 
 import { auth, db, FieldValue, Timestamp } from "../config/firebase.js";
 import { env } from "../config/env.js";
-import { COLLECTIONS, ROLES, STUDENT_STATUS, TIERS } from "../constants/index.js";
+import { COLLECTIONS, ROLES, STUDENT_STATUS } from "../constants/index.js";
 import { findUniversity } from "../data/universities.js";
 import { ApiError } from "../utils/ApiError.js";
 import * as email from "./email.service.js";
@@ -95,9 +94,9 @@ function publicUniversity(universityId) {
   return university ? { id: university.id, name: university.name } : null;
 }
 
-/** Whether this account has to be a verified student to use its plan. */
+/** Whether this account has to be a verified student to run assessments. */
 export function isRequiredFor(profile) {
-  return profile.tier !== TIERS.PREMIUM && profile.role !== ROLES.ADMIN && !profile.organisationId;
+  return profile.role !== ROLES.ADMIN && !profile.organisationId;
 }
 
 /**
@@ -126,7 +125,7 @@ export function statusFor(profile) {
   };
 }
 
-/** Whether the account may use the features the free plan gates behind verification. */
+/** Whether the account may use the features gated behind student verification. */
 export function isSatisfied(profile) {
   return !isRequiredFor(profile) || statusFor(profile).status === STUDENT_STATUS.VERIFIED;
 }
@@ -136,14 +135,15 @@ export function refusalMessage(profile) {
   const university = findUniversity(profile.studentVerification?.universityId);
   if (university && !isAcademicEmail(profile.email, university.id)) {
     return (
-      `The free plan is for students, and ${profile.email} is not a ${university.name} ` +
-      "address. Change your account email to your university address, or upgrade to premium."
+      `Personal accounts are for students, and ${profile.email} is not a ${university.name} ` +
+      "address. Change your account email to your university address, or join a team " +
+      "with an invitation from its admin."
     );
   }
   if (!isAcademicEmail(profile.email, university?.id)) {
     return (
-      "The free plan is for students. Change your account email to your university " +
-      "address and verify it, or upgrade to premium."
+      "Personal accounts are for students. Change your account email to your university " +
+      "address and verify it, or join a team with an invitation from its admin."
     );
   }
   // Worded for both front ends: the app's Account menu and `bioaudit verify-student`

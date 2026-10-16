@@ -2,7 +2,7 @@
 
 Covers the functional-hierarchy items that belong to a signed-in user rather than to
 scanning: update account details, change email address, change password, delete account,
-join an organisation from an invitation, and verify a student email for the free plan.
+join an organisation from an invitation, and verify a student email.
 
 Three of these end the session on purpose. Changing a password signs every device out,
 and deleting an account obviously does too. Each returns a result telling the caller
@@ -54,7 +54,7 @@ def show_profile_dialog(parent, client: ApiClient) -> DialogResult:
             header = QLabel(
                 f"<b>{account.email if account else 'Unknown'}</b>"
                 f"<span style='color:#5f6672'> &nbsp;·&nbsp; "
-                f"{account.tier if account else '?'} plan"
+                f"{('team' if account.is_team else 'student') if account else '?'} account"
                 f"{' · admin' if account and account.is_admin else ''}</span>"
             )
             header.setTextFormat(Qt.RichText)
@@ -343,9 +343,9 @@ def show_join_organisation_dialog(parent, client: ApiClient) -> DialogResult:
 
 
 def show_student_verification_dialog(parent, client: ApiClient) -> DialogResult:
-    """Enter the code emailed to a university address, unlocking the free plan.
+    """Enter the code emailed to a university address, unlocking scanning.
 
-    The free plan is for students, so a free personal account cannot run assessments
+    Personal accounts are for students, so a student account cannot run assessments
     until this is done. An account whose email is not at a university gets an
     explanation instead of a code box, since no code could ever be sent to it.
     """
@@ -374,12 +374,12 @@ def show_student_verification_dialog(parent, client: ApiClient) -> DialogResult:
             if not eligible:
                 what = f"a {university}" if university else "a university"
                 note = QLabel(
-                    "The free plan is for students, and "
+                    "Personal accounts are for students, and "
                     f"<b>{account.email if account else 'this address'}</b> is not "
-                    f"{what} email address.<br><br>To use the free plan, change your "
-                    "account email to your university address in Account settings and "
-                    "verify it. Otherwise, upgrade to premium.<br><br>You can still view "
-                    "and delete any history you already have.")
+                    f"{what} email address.<br><br>To run scans, change your account "
+                    "email to your university address in Account settings and verify "
+                    "it, or join a team with an invitation from its admin.<br><br>You "
+                    "can still view and delete any history you already have.")
                 note.setWordWrap(True)
                 layout.addWidget(note)
                 buttons = QDialogButtonBox(QDialogButtonBox.Close)
@@ -389,10 +389,10 @@ def show_student_verification_dialog(parent, client: ApiClient) -> DialogResult:
 
             where = f" at <b>{university}</b>" if university else ""
             if never_sent:
-                text = (f"The free plan is for students{where}. Press <b>Send code</b> and we "
+                text = (f"Personal accounts are for students{where}. Press <b>Send code</b> and we "
                         f"will email a six-digit code to <b>{account.email}</b>.")
             else:
-                text = (f"The free plan is for students{where}. Enter the six-digit code we "
+                text = (f"Personal accounts are for students{where}. Enter the six-digit code we "
                         f"emailed to <b>{account.email}</b> to unlock scanning. Codes expire "
                         "after 15 minutes.")
             intro = QLabel(text)
@@ -460,43 +460,4 @@ def show_student_verification_dialog(parent, client: ApiClient) -> DialogResult:
             self.accept()
 
     StudentDialog().exec()
-    return result
-
-
-def confirm_cancel_subscription(parent, client: ApiClient) -> DialogResult:
-    """Cancel the premium plan, warning first about history that will be trimmed."""
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QInputDialog, QMessageBox
-
-    result = DialogResult()
-
-    confirm = QMessageBox.question(
-        parent, "Cancel subscription",
-        "Cancel your premium plan and go back to the free plan?\n\n"
-        "You will lose run comparison and report export, and your history will be trimmed "
-        "to the newest few runs the next time you save a scan.",
-    )
-    if confirm != QMessageBox.Yes:
-        return result
-
-    reason, ok = QInputDialog.getText(
-        parent, "Cancel subscription", "Reason (optional):")
-    if not ok:
-        return result
-
-    try:
-        parent.setCursor(Qt.WaitCursor)
-        response = client.cancel_subscription(reason.strip() or None)
-    except ApiClientError as exc:
-        QMessageBox.warning(parent, "Could not cancel", str(exc))
-        return result
-    finally:
-        parent.setCursor(Qt.ArrowCursor)
-
-    result.changed = True
-    result.signed_out = True
-    message = response.get("message", "Your subscription has been cancelled.")
-    warning = response.get("warning")
-    result.message = message + (f"\n\n{warning}" if warning else "")
-    QMessageBox.information(parent, "Subscription cancelled", result.message)
     return result
