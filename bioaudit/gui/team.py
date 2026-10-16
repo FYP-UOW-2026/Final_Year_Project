@@ -788,7 +788,7 @@ def make_team_tab(parent_window, palette: dict):
         def _audit_tab(self) -> QWidget:
             w = QWidget()
             layout = QVBoxLayout(w)
-            self.audit_table = _table(["When", "Action", "Details"])
+            self.audit_table = _table(["When", "Action", "By", "Affected", "Details"])
             layout.addWidget(self.audit_table, 1)
             note = QLabel(
                 "Every admin action that touches another person is recorded here, and entries "
@@ -806,9 +806,19 @@ def make_team_tab(parent_window, palette: dict):
                 return    # the rest of the tab is still useful without it
             rows = []
             for e in entries:
-                meta = e.get("metadata") or {}
+                # The server names both people by email. An id with no email left is an
+                # account deleted since; one without an id is simply not part of the entry.
+                # A server too old to send the email fields leaves both columns blank.
+                named = "actorEmail" in e
+                by = e.get("actorEmail") or (
+                    "deleted account" if named and e.get("actorId") else "")
+                affected = e.get("subjectEmail") or (
+                    "deleted account" if named and e.get("subjectId") else "")
+                # The affected email is already its own column, so not repeated here.
+                meta = {k: v for k, v in (e.get("metadata") or {}).items() if k != "email"
+                        or v != affected}
                 detail = ", ".join(f"{k}={v}" for k, v in meta.items() if v not in (None, ""))
-                rows.append([format_when(e.get("at")), e.get("action", ""), detail])
+                rows.append([format_when(e.get("at")), e.get("action", ""), by, affected, detail])
             _fill(self.audit_table, rows)
 
     return TeamTab()

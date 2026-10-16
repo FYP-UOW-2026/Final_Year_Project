@@ -429,6 +429,8 @@ router.delete(
       actorId: req.user.uid,
       subjectId: req.params.uid,
       organisationId: req.params.orgId,
+      // Kept so the entry still names them if their account is later deleted.
+      metadata: { email: target?.email ?? null },
     });
 
     if (target?.email) {
