@@ -317,11 +317,11 @@ def run(cfg: Config | None = None) -> int:
             tabs.setDocumentMode(True)
             tabs.tabBar().hide()
             tabs.addTab(self._build_home_tab(), "Home")
-            # Indices kept because the two assessment tabs are hidden for an admin account,
-            # which oversees a team's assessments rather than running its own.
+            # Indices kept because the assessment tabs and History are hidden for an admin
+            # account, which oversees a team's assessments rather than running its own.
             self._scan_tab_index = tabs.addTab(self._build_scan_tab(), "Scan an APK")
             self._assess_tab_index = tabs.addTab(self._build_assess_tab(), "Assess a device")
-            tabs.addTab(self._build_history_tab(), "History")
+            self._history_tab_index = tabs.addTab(self._build_history_tab(), "History")
             self.team_tab = team.make_team_tab(self, self.palette_colours)
             self._team_tab_index = tabs.addTab(self.team_tab, "Team")
             self.tabs = tabs
@@ -613,27 +613,28 @@ def run(cfg: Config | None = None) -> int:
             # rather than running its own, and the server refuses a scan from one. Hiding
             # the two tabs is what stops that becoming a rejected upload after the work of
             # a full scan has already been done.
+            # History goes too: it lists only the account's own runs, so for an admin it
+            # could never be anything but empty. Members' runs are read from Team instead.
             is_admin = signed_in and account.is_admin
-            for index in (self._scan_tab_index, self._assess_tab_index):
+            own_runs_pages = (self._scan_tab_index, self._assess_tab_index,
+                              self._history_tab_index)
+            for index in own_runs_pages:
                 self.tabs.setTabVisible(index, not is_admin)
-            # Mirror the same gate on the Home tab: an admin oversees a team's assessments
-            # rather than running its own, so the tiles that open those tabs are removed
-            # entirely rather than left as a disabled dead end. History and Team stay put
-            # in their own grid cells (rather than stretching to fill the gap) so they
-            # keep the same size as they have for a non-admin account.
-            for tile in (self.home_scan_tile, self.home_assess_tile):
+            # Mirror the same gate on the Home tab: the tiles that open those pages are
+            # removed entirely rather than left as a disabled dead end. Team stays put in
+            # its own grid cell (rather than stretching to fill the gap) so it keeps the
+            # same size as it has for a non-admin account.
+            for tile in (self.home_scan_tile, self.home_assess_tile, self.home_history_tile):
                 tile.setVisible(not is_admin)
-            if is_admin and self.tabs.currentIndex() in (
-                self._scan_tab_index, self._assess_tab_index
-            ):
-                self.tabs.setCurrentIndex(self._assess_tab_index + 1)   # History
 
             # Team tools only make sense for an organisation admin -- hide the tab itself
             # for everyone else rather than showing it with a "not an admin" placeholder.
             team_visible = signed_in and account.is_admin and bool(account.organisation_id)
             self.tabs.setTabVisible(self._team_tab_index, team_visible)
+            if is_admin and self.tabs.currentIndex() in own_runs_pages:
+                self.tabs.setCurrentIndex(self._team_tab_index if team_visible else 0)
             if not team_visible and self.tabs.currentIndex() == self._team_tab_index:
-                self.tabs.setCurrentIndex(self._scan_tab_index)
+                self.tabs.setCurrentIndex(0 if is_admin else self._scan_tab_index)
 
             self.team_tab.refresh_visibility()
             # The Home tile follows the same rule as the page it opens.
@@ -939,7 +940,7 @@ def run(cfg: Config | None = None) -> int:
                 "history", "history", "History",
                 "Browse past runs saved to your account, and compare two of them.")
             self.home_history_tile.clicked.connect(
-                lambda: self.tabs.setCurrentIndex(self._assess_tab_index + 1))
+                lambda: self.tabs.setCurrentIndex(self._history_tab_index))
 
             self.home_team_tile = _tile_button(
                 "team", "team", "Team",

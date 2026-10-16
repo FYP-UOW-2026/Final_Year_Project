@@ -116,21 +116,22 @@ export async function getScan(scanId) {
  * A member sees only their own. An admin may also read a scan belonging to a member of
  * their organisation, which is what the Admin "View member data" function needs, and
  * that read is written to the audit log by the route that calls it.
+ *
+ * Membership is checked against the organisation as it is now, not the organisationId
+ * stamped on the scan: a scan saved before its owner joined carries no organisation,
+ * yet it is listed by "View member data", so the admin must be able to open it. By the
+ * same rule, once a member is removed their scans are no longer the admin's to read.
  */
 export async function getScanForCaller(scanId, user) {
   const scan = await getScan(scanId);
 
   if (scan.userId === user.uid) return scan;
 
-  const isAdminOfSameOrg =
-    user.role === "admin" &&
-    user.organisationId &&
-    scan.organisationId === user.organisationId;
-
-  if (!isAdminOfSameOrg) {
-    throw ApiError.forbidden("You do not have access to that scan.");
+  if (user.role === "admin" && user.organisationId) {
+    const org = await db.collection(COLLECTIONS.ORGANISATIONS).doc(user.organisationId).get();
+    if (org.exists && (org.data().memberIds ?? []).includes(scan.userId)) return scan;
   }
-  return scan;
+  throw ApiError.forbidden("You do not have access to that scan.");
 }
 
 /** Persist an AI explanation onto the finding it belongs to. */
