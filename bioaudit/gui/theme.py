@@ -3,58 +3,104 @@
 Kept separate from app.py so the layout code stays about layout, and so the palette can
 be adjusted without touching behaviour.
 
-The look is an Xbox-dashboard style: a near-black chrome, a bright green accent (the
-same role Xbox's own accent plays — the one colour that means "the current selection" or
-"the primary action"), big bold tab navigation, and a grid of colourful gradient tiles on
-the Home tab standing in for a dashboard's app tiles. Unlike the previous theme this no
-longer follows the OS light/dark setting: a dashboard look is a deliberate, single
-identity, not something that should flip to a white window because Windows is in light
-mode. Severity colours are unchanged by this — they carry meaning on their own and a
-reader should not have to relearn them.
+The look is a dark developer-tool style: slate surfaces, one green accent that means
+"run" or "the current selection", and flat cards with a single consistent treatment.
+Colours, fonts and the no-emoji-icons rule were set in the UI redesign to suit a security
+testing tool. Every text colour pair here was checked against WCAG AA: 4.5:1
+for text, 3:1 for control borders and focus rings.
 """
 
 from __future__ import annotations
 
+import os
+
 DARK = {
-    "window": "#0a0c10",
-    "surface": "#14171c",
-    "surface_alt": "#1b1f26",
-    "border": "#262b33",
-    "border_strong": "#3a4149",
-    "text": "#f3f6fa",
-    "muted": "#98a1ac",
-    "primary": "#107C10",
-    "primary_hover": "#16A616",
-    "primary_pressed": "#0c5e0c",
-    "primary_text": "#ffffff",
-    "disabled_bg": "#1c2026",
-    "disabled_text": "#5b6169",
-    "selection": "#1f4d2b",
-    "focus": "#3BD16F",
+    "window": "#0f172a",
+    "surface": "#1b2336",
+    "surface_alt": "#272f42",
+    "border": "#334155",
+    # Control boundaries need 3:1 against the card behind them; #64748b is 3.3:1.
+    "border_strong": "#64748b",
+    "text": "#f8fafc",
+    "muted": "#94a3b8",
+    "primary": "#22c55e",
+    "primary_hover": "#4ade80",
+    "primary_pressed": "#16a34a",
+    # Dark text on the green, 7.8:1. White on this green would only be 2.3:1.
+    "primary_text": "#0f172a",
+    "disabled_bg": "#1e293b",
+    "disabled_text": "#64748b",
+    "selection": "#14532d",
+    "focus": "#4ade80",
 }
 
 # Kept as a fallback only (used if styling fails to apply at all) — the app always
-# opens in the dashboard-dark look above, regardless of the OS theme.
+# opens in the dark look above, regardless of the OS theme.
 LIGHT = DARK
 
-# Semantic, so they stay constant across themes.
+# Semantic, so they stay constant across themes. Darker than before so the white count
+# text on each badge reaches 4.5:1; the old medium (2.4:1) and low (3.5:1) did not.
 SEVERITY_COLOURS = {
-    "critical": "#c4291f",
-    "high": "#e5382d",
-    "medium": "#e6952e",
-    "low": "#2f8fd8",
-    "info": "#8b93a1",
+    "critical": "#b91c1c",
+    "high": "#c2410c",
+    "medium": "#a16207",
+    "low": "#1d4ed8",
+    "info": "#475569",
 }
 
-# One accent per Home-tab tile / section card, chosen the way an Xbox tile grid uses a
-# different colour per app rather than a single flat accent everywhere. Each entry is a
-# (start, end) gradient stop pair.
-TILE_ACCENTS = {
-    "scan": ("#1f6fb2", "#3aa3e8"),
-    "assess": ("#6d28d9", "#a166f7"),
-    "history": ("#c2680f", "#f2a33d"),
-    "team": ("#0c5e0c", "#22c522"),
+# Tile and section names are kept so app.py's properties still match, but every tile now
+# shares one treatment. Four competing gradients made no colour mean anything.
+TILE_ACCENTS = {name: (DARK["primary"], DARK["primary"])
+                for name in ("scan", "assess", "history", "team")}
+
+# Lucide icons (ISC licence), as SVG strokes so they stay sharp at any size and take the
+# theme colour, which an emoji cannot.
+ICONS = {
+    "scan": '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    "assess": '<rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/>',
+    "history": ('<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>'
+                '<path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>'),
+    "team": ('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>'
+             '<circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/>'
+             '<path d="M16 3.13a4 4 0 0 1 0 7.75"/>'),
+    "home": ('<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/>'
+             '<path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999'
+             'A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
+    "shield": ('<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13'
+               'V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0'
+               'C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>'),
 }
+
+# Bundled so the app looks the same on any PC, installed fonts or not. Both are under the
+# SIL Open Font License; the licence files sit next to them in gui/fonts/.
+FONT_DIR = os.path.join(os.path.dirname(__file__), "fonts")
+
+
+def load_fonts() -> None:
+    """Register the bundled fonts with Qt. Missing files fall back to Segoe UI."""
+    import glob
+
+    from PySide6.QtGui import QFontDatabase
+
+    for path in glob.glob(os.path.join(FONT_DIR, "*.ttf")):
+        QFontDatabase.addApplicationFont(path)
+
+
+def icon_pixmap(name: str, colour: str, size: int = 32):
+    """Render one of ICONS to a QPixmap in the given colour."""
+    from PySide6.QtCore import QByteArray, Qt
+    from PySide6.QtGui import QPainter, QPixmap
+    from PySide6.QtSvg import QSvgRenderer
+
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
+           f'stroke="{colour}" stroke-width="2" stroke-linecap="round" '
+           f'stroke-linejoin="round">{ICONS[name]}</svg>')
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    QSvgRenderer(QByteArray(svg.encode())).render(painter)
+    painter.end()
+    return pixmap
 
 
 def is_dark(app) -> bool:  # noqa: ARG001 - kept for API compatibility
@@ -68,33 +114,44 @@ def palette_for(app) -> dict:  # noqa: ARG001
 
 def stylesheet(p: dict) -> str:
     """Build the Qt stylesheet from a palette."""
-    tiles = "\n".join(
-        f"""
-QPushButton[tileAccent="{name}"] {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {start}, stop:1 {end});
-    border: 2px solid transparent;
-    border-radius: 16px;
+    # One flat card treatment for every tile. The 2px border is always there (transparent
+    # when idle) so hover and focus change colour without shifting the layout.
+    tiles = f"""
+QPushButton[tileAccent] {{
+    background: {p["surface"]};
+    border: 2px solid {p["border"]};
+    border-radius: 12px;
     text-align: left;
     padding: 0px;
+    /* A stylesheet min-height overrides setMinimumSize(), so the generic button rule's
+       20px would otherwise squash the card down to a bar. */
+    min-height: 128px;
 }}
-QPushButton[tileAccent="{name}"]:hover {{ border: 2px solid #ffffff; }}
-QPushButton[tileAccent="{name}"]:pressed {{ padding-top: 3px; }}
+QPushButton[tileAccent]:hover {{ border-color: {p["primary"]}; background: {p["surface_alt"]}; }}
+QPushButton[tileAccent]:focus {{ border-color: {p["focus"]}; }}
+QPushButton[tileAccent]:pressed {{ background: {p["window"]}; }}
 """
-        for name, (start, end) in TILE_ACCENTS.items()
-    )
-    section_accents = "\n".join(
-        f'QGroupBox[accent="{name}"] {{ border-top: 3px solid {start}; }}'
-        for name, (start, _end) in TILE_ACCENTS.items()
-    )
+    # Sections no longer get a coloured top edge: with one accent colour, painting it on
+    # every card would make green mean "decoration" instead of "run".
+    section_accents = ""
 
     return f"""
 /* --- base ---------------------------------------------------------- */
 QWidget {{
     background: {p["window"]};
     color: {p["text"]};
-    font-family: "Segoe UI", "Inter", Arial, sans-serif;
+    font-family: "IBM Plex Sans", "Segoe UI", Arial, sans-serif;
     font-size: 10pt;
 }}
+
+/* Text-only widgets take their parent's background. Without this every label inside a
+   card painted the window colour behind itself, leaving dark boxes on the card. */
+QLabel, QCheckBox, QRadioButton {{ background: transparent; }}
+
+/* Visible keyboard focus on every control, not only on text fields. */
+QPushButton:focus {{ border: 1px solid {p["focus"]}; }}
+QCheckBox:focus {{ color: {p["focus"]}; }}
+QTabBar::tab:focus {{ color: {p["focus"]}; }}
 
 QMainWindow, QDialog {{ background: {p["window"]}; }}
 
@@ -126,28 +183,30 @@ QGroupBox {{
     background: {p["surface"]};
     border: 1px solid {p["border"]};
     border-radius: 12px;
-    margin-top: 14px;
-    padding: 14px 14px 12px 14px;
+    margin-top: 0px;
+    padding: 38px 18px 16px 18px;
     font-weight: 600;
 }}
+/* Title sits inside the card as its heading, not cut into the border. */
 QGroupBox::title {{
-    subcontrol-origin: margin;
+    subcontrol-origin: padding;
     subcontrol-position: top left;
-    left: 12px;
-    padding: 0 6px;
-    color: {p["muted"]};
-    font-size: 9pt;
-    font-weight: 700;
-    text-transform: uppercase;
+    left: 18px;
+    top: 14px;
+    padding: 0;
+    color: {p["text"]};
+    font-size: 10.5pt;
+    font-weight: 600;
 }}
 {section_accents}
 
 /* --- inputs -------------------------------------------------------- */
 QLineEdit, QComboBox {{
-    background: {p["surface_alt"]};
+    background: {p["window"]};
     border: 1px solid {p["border_strong"]};
-    border-radius: 6px;
-    padding: 7px 9px;
+    border-radius: 8px;
+    padding: 8px 10px;
+    min-height: 20px;
     selection-background-color: {p["selection"]};
     selection-color: {p["text"]};
 }}
@@ -172,11 +231,12 @@ QComboBox QAbstractItemView {{
 
 /* --- buttons ------------------------------------------------------- */
 QPushButton {{
-    background: {p["surface_alt"]};
+    background: transparent;
     color: {p["text"]};
     border: 1px solid {p["border_strong"]};
-    border-radius: 6px;
-    padding: 7px 14px;
+    border-radius: 8px;
+    padding: 8px 16px;
+    min-height: 20px;
     font-weight: 600;
 }}
 QPushButton:hover {{ background: {p["disabled_bg"]}; border-color: {p["muted"]}; }}
@@ -228,9 +288,9 @@ QPushButton#segment:checked {{
 
 /* --- home tiles ------------------------------------------------------ */
 {tiles}
-QLabel#tileIcon {{ font-size: 28pt; background: transparent; }}
-QLabel#tileTitle {{ color: #ffffff; font-size: 13pt; font-weight: 800; background: transparent; }}
-QLabel#tileSubtitle {{ color: rgba(255,255,255,0.88); font-size: 9pt; background: transparent; }}
+QLabel#tileIcon {{ background: transparent; }}
+QLabel#tileTitle {{ color: {p["text"]}; font-size: 13pt; font-weight: 700; background: transparent; }}
+QLabel#tileSubtitle {{ color: {p["muted"]}; font-size: 9.5pt; background: transparent; }}
 QLabel#heroTitle {{
     color: {p["text"]};
     font-size: 22pt;
@@ -239,11 +299,10 @@ QLabel#heroTitle {{
 }}
 QLabel#heroSubtitle {{ color: {p["muted"]}; font-size: 10.5pt; background: transparent; }}
 QFrame#heroBar {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 {p["primary"]}, stop:1 {p["focus"]});
-    border-radius: 2px;
-    max-height: 4px;
-    min-height: 4px;
+    background: {p["border"]};
+    border-radius: 1px;
+    max-height: 1px;
+    min-height: 1px;
 }}
 
 /* --- checkboxes ---------------------------------------------------- */
@@ -341,12 +400,73 @@ QLabel#universityHint {{
     font-size: 9pt;
 }}
 QLabel#fieldLabel {{ color: {p["muted"]}; font-weight: 600; font-size: 9pt; }}
-QLabel#accountBadge {{ color: {p["muted"]}; padding-right: 8px; }}
+QLabel#accountBadge {{ color: {p["muted"]}; font-size: 9pt; padding: 0; }}
+
+/* --- app shell: sidebar --------------------------------------------- */
+QFrame#sidebar {{
+    background: {p["surface"]};
+    border: none;
+    border-right: 1px solid {p["border"]};
+}}
+QFrame#sidebar QWidget {{ background: transparent; }}
+QLabel#brandName {{ color: {p["text"]}; font-size: 13pt; font-weight: 700; }}
+QLabel#brandTag {{
+    color: {p["muted"]};
+    font-family: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+    font-size: 8pt;
+}}
+QLabel#navHeading {{
+    color: {p["muted"]};
+    font-size: 8pt;
+    font-weight: 600;
+    padding: 0 12px;
+}}
+QPushButton#navItem {{
+    background: transparent;
+    color: {p["muted"]};
+    border: none;
+    border-left: 3px solid transparent;
+    border-radius: 0;
+    padding: 10px 12px;
+    text-align: left;
+    font-weight: 500;
+}}
+QPushButton#navItem:hover {{ color: {p["text"]}; background: {p["surface_alt"]}; }}
+QPushButton#navItem:focus {{ color: {p["focus"]}; }}
+QPushButton#navItem:checked {{
+    color: {p["text"]};
+    background: {p["surface_alt"]};
+    border-left: 3px solid {p["primary"]};
+    font-weight: 600;
+}}
+QFrame#sidebarDivider {{ background: {p["border"]}; max-height: 1px; min-height: 1px; }}
+
+/* --- app shell: page header ----------------------------------------- */
+QLabel#pageTitle {{ color: {p["text"]}; font-size: 18pt; font-weight: 700; }}
+QLabel#pageSubtitle {{ color: {p["muted"]}; font-size: 10pt; }}
+QTabWidget#pages > QTabBar {{ max-height: 0px; }}
+
+/* --- home: how-it-works steps ---------------------------------------- */
+QFrame#stepCard {{
+    background: transparent;
+    border: 1px solid {p["border"]};
+    border-radius: 12px;
+}}
+QLabel#stepNumber {{
+    color: {p["primary"]};
+    font-family: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+    font-size: 9pt;
+    font-weight: 600;
+}}
+QLabel#stepTitle {{ color: {p["text"]}; font-weight: 600; }}
+QLabel#stepBody {{ color: {p["muted"]}; font-size: 9pt; }}
+QLabel#sectionHeading {{ color: {p["text"]}; font-size: 11pt; font-weight: 600; }}
 """
 
 
 def apply_theme(app) -> dict:
     """Style the application and return the palette that was used."""
+    load_fonts()
     p = palette_for(app)
     app.setStyleSheet(stylesheet(p))
     return p
