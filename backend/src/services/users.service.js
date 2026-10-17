@@ -42,6 +42,7 @@ export async function createAccount({
   role = ROLES.MEMBER,
   organisationId = null,
   universityId = null,
+  tosVersion = null,
 }) {
   let userRecord;
   try {
@@ -68,6 +69,8 @@ export async function createAccount({
       verifiedAt: null,
       universityId,
     },
+    tosVersion,
+    tosAcceptedAt: tosVersion ? FieldValue.serverTimestamp() : null,
     scanCount: 0,
     createdAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
@@ -303,6 +306,7 @@ export function toPublicProfile(profile) {
     role: profile.role,
     organisationId: profile.organisationId,
     scanCount: profile.scanCount ?? 0,
+    tosVersion: profile.tosVersion ?? null,
     // Included so a client can show the remaining allowance before spending it, rather
     // than only finding out at the point of refusal.
     aiQuota: aiQuotaFor(profile),

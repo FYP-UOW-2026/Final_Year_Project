@@ -301,7 +301,7 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
                     # Create the account, redeem the invite, then sign in again: joining
                     # revokes the session server-side so the new team permissions take
                     # effect on the next sign-in.
-                    client.register(email, password, name)
+                    client.register(email, password, name, tos_accepted=True)
                     client.join_organisation(token)
                     client.login(email, password)
 

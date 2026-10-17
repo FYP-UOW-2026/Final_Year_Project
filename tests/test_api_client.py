@@ -85,7 +85,7 @@ def _verify_student(client: ApiClient) -> None:
 @pytest.fixture
 def signed_in(client: ApiClient) -> ApiClient:
     """A student account that can scan, which means a verified student."""
-    client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1", "Pytest User")
+    client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1", "Pytest User", tos_accepted=True)
     _verify_student(client)
     return client
 
@@ -120,7 +120,7 @@ def test_health_reports_status(client: ApiClient):
 
 def test_register_then_read_profile(client: ApiClient):
     email = f"pytest-{_unique()}@example.com"
-    account = client.register(email, "pytest-password-1", "Pytest User")
+    account = client.register(email, "pytest-password-1", "Pytest User", tos_accepted=True)
 
     assert account.email == email
     assert account.tier == "student"
@@ -133,7 +133,7 @@ def test_register_then_read_profile(client: ApiClient):
 
 def test_login_with_wrong_password_is_refused(client: ApiClient):
     email = f"pytest-{_unique()}@example.com"
-    client.register(email, "pytest-password-1")
+    client.register(email, "pytest-password-1", tos_accepted=True)
     client.logout()
 
     with pytest.raises(ApiClientError) as exc:
@@ -144,7 +144,7 @@ def test_login_with_wrong_password_is_refused(client: ApiClient):
 def test_unknown_email_and_wrong_password_look_identical(client: ApiClient):
     """The API must not reveal which accounts exist. See the backend's auth service."""
     email = f"pytest-{_unique()}@example.com"
-    client.register(email, "pytest-password-1")
+    client.register(email, "pytest-password-1", tos_accepted=True)
     client.logout()
 
     with pytest.raises(ApiClientError) as wrong_password:
@@ -164,13 +164,13 @@ def test_universities_are_listed(client: ApiClient):
 def test_registering_needs_an_email_from_the_chosen_university(client: ApiClient):
     with pytest.raises(ApiClientError) as exc:
         client.register(f"pytest-{_unique()}@example.com", "pytest-password-1",
-                        university_id="oxford")
+                        university_id="oxford", tos_accepted=True)
     assert exc.value.status == 400
     assert "@ox.ac.uk" in exc.value.message
 
 
 def test_unverified_student_cannot_upload(client: ApiClient):
-    account = client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1")
+    account = client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1", tos_accepted=True)
     assert account.needs_student_verification
     with pytest.raises(ApiClientError) as exc:
         client.upload_run(_sample_run(), authorised=True)
@@ -229,12 +229,12 @@ def test_student_is_blocked_from_team_features(signed_in: ApiClient):
 
 def test_team_member_can_compare_and_export(client: ApiClient):
     _, organisation = client.register_admin(
-        f"pytest-admin-{_unique()}@example.com", "pytest-password-1", "Pytest Team")
+        f"pytest-admin-{_unique()}@example.com", "pytest-password-1", "Pytest Team", tos_accepted=True)
     member_email = f"pytest-member-{_unique()}@example.com"
     invitation = client.invite_member(organisation["id"], member_email)
 
     member = ApiClient(BASE_URL)
-    member.register(member_email, "pytest-password-1")
+    member.register(member_email, "pytest-password-1", tos_accepted=True)
     member.join_organisation(invitation["token"])
     # Joining revokes the session so the new permissions take effect.
     account = member.login(member_email, "pytest-password-1")
@@ -269,8 +269,7 @@ def test_delete_and_clear_history(signed_in: ApiClient):
 def test_admin_can_invite_and_manage_a_member(client: ApiClient):
     admin_email = f"pytest-admin-{_unique()}@example.com"
     account, organisation = client.register_admin(
-        admin_email, "pytest-password-1", "Pytest Security Team", "Owner"
-    )
+        admin_email, "pytest-password-1", "Pytest Security Team", "Owner", tos_accepted=True)
     assert account.is_admin
     org_id = organisation["id"]
 
@@ -279,7 +278,7 @@ def test_admin_can_invite_and_manage_a_member(client: ApiClient):
     assert invitation["token"], "the one-time token should be returned"
 
     member = ApiClient(BASE_URL)
-    member.register(member_email, "pytest-password-1", "Member")
+    member.register(member_email, "pytest-password-1", "Member", tos_accepted=True)
     member.join_organisation(invitation["token"])
 
     members = client.list_members(org_id)
@@ -296,15 +295,14 @@ def test_admin_cannot_see_member_findings(client: ApiClient):
     """The privacy line this project promises: an app's code stays on its own machine."""
     admin_email = f"pytest-admin-{_unique()}@example.com"
     _, organisation = client.register_admin(
-        admin_email, "pytest-password-1", "Pytest Team"
-    )
+        admin_email, "pytest-password-1", "Pytest Team", tos_accepted=True)
     org_id = organisation["id"]
 
     member_email = f"pytest-member-{_unique()}@example.com"
     invitation = client.invite_member(org_id, member_email)
 
     member = ApiClient(BASE_URL)
-    member_account = member.register(member_email, "pytest-password-1")
+    member_account = member.register(member_email, "pytest-password-1", tos_accepted=True)
     member.join_organisation(invitation["token"])
     member.login(member_email, "pytest-password-1")
     member.upload_run(_sample_run("com.member.private"), authorised=True)
@@ -315,9 +313,17 @@ def test_admin_cannot_see_member_findings(client: ApiClient):
     assert scans[0]["counts"], "but the severity counts should be visible"
 
 
+def test_register_requires_terms(client: ApiClient):
+    with pytest.raises(ApiClientError) as exc:
+        client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1",
+                        tos_accepted=False)
+    assert exc.value.status == 400
+    assert "Terms of Use" in str(exc.value)
+
+
 def test_error_message_is_human_readable(client: ApiClient):
     with pytest.raises(ApiClientError) as exc:
-        client.register("not-an-email", "short")
+        client.register("not-an-email", "short", tos_accepted=True)
     assert exc.value.status == 400
     # The GUI shows these directly, so they have to read as sentences.
     assert exc.value.details, "validation errors should list the offending fields"

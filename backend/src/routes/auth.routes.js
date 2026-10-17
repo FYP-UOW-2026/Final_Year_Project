@@ -12,7 +12,7 @@ import { z } from "zod";
 
 import { env } from "../config/env.js";
 import { auth } from "../config/firebase.js";
-import { ROLES } from "../constants/index.js";
+import { ROLES, TOS_VERSION } from "../constants/index.js";
 import { requireAuth } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import * as firebaseAuth from "../services/firebaseAuth.service.js";
@@ -37,6 +37,11 @@ const authLimiter = rateLimit({
 });
 
 const emailSchema = z.string().trim().toLowerCase().email("Enter a valid email address.");
+// Registration is refused without it; the accepted version and time are stored on the
+// user doc so a later terms change can ask existing users to accept again.
+const tosSchema = z.literal(true, {
+  errorMap: () => ({ message: "You must accept the Terms of Use to create an account." }),
+});
 const passwordSchema = z
   .string()
   .min(8, "Use at least 8 characters.")
@@ -56,6 +61,7 @@ router.post(
     body: z.object({
       email: emailSchema,
       password: passwordSchema,
+      tosAccepted: tosSchema,
       displayName: z.string().trim().min(1).max(80).optional(),
       // From GET /api/universities. Omitted for "my university isn't listed" and for
       // accounts that are not registering as students.
@@ -72,6 +78,7 @@ router.post(
       password: req.body.password,
       displayName: req.body.displayName,
       role: ROLES.MEMBER,
+      tosVersion: TOS_VERSION,
       universityId: req.body.universityId ?? null,
     });
 
@@ -98,6 +105,7 @@ router.post(
     body: z.object({
       email: emailSchema,
       password: passwordSchema,
+      tosAccepted: tosSchema,
       displayName: z.string().trim().min(1).max(80).optional(),
       organisationName: z.string().trim().min(2, "Give your organisation a name.").max(120),
     }),
@@ -108,6 +116,7 @@ router.post(
       password: req.body.password,
       displayName: req.body.displayName,
       role: ROLES.ADMIN,
+      tosVersion: TOS_VERSION,
     });
 
     const organisation = await organisations.createOrganisation({

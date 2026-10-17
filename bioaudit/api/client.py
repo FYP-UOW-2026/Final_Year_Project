@@ -248,10 +248,13 @@ class ApiClient:
 
     def register(self, email: str, password: str,
                  display_name: Optional[str] = None,
-                 university_id: Optional[str] = None) -> Account:
+                 university_id: Optional[str] = None,
+                 tos_accepted: bool = False) -> Account:
         """Create a personal account. `university_id` comes from list_universities();
-        the server then requires the email to be one that university issues."""
-        payload = {"email": email, "password": password}
+        the server then requires the email to be one that university issues.
+        `tos_accepted` records that the user agreed to docs/TERMS.md; the server
+        refuses signup without it."""
+        payload = {"email": email, "password": password, "tosAccepted": bool(tos_accepted)}
         if display_name:
             payload["displayName"] = display_name
         if university_id:
@@ -263,10 +266,12 @@ class ApiClient:
         return self.account
 
     def register_admin(self, email: str, password: str, organisation_name: str,
-                       display_name: Optional[str] = None) -> tuple[Account, dict]:
+                       display_name: Optional[str] = None,
+                       tos_accepted: bool = False) -> tuple[Account, dict]:
         """Create an admin account together with the organisation it administers."""
         payload = {"email": email, "password": password,
-                   "organisationName": organisation_name}
+                   "organisationName": organisation_name,
+                   "tosAccepted": bool(tos_accepted)}
         if display_name:
             payload["displayName"] = display_name
 
@@ -394,12 +399,14 @@ class ApiClient:
 
     def upload_run(self, run: TestRun, *, authorised: bool,
                    apk_file_name: Optional[str] = None,
-                   tool_version: Optional[str] = None) -> dict:
+                   tool_version: Optional[str] = None,
+                   client_name: Optional[str] = None) -> dict:
         """Save a completed TestRun to the server.
 
         `authorised` records that the user confirmed they own or may test the app. The
         server refuses a device assessment without it, so this mirrors the same gate the
-        CLI and GUI already enforce before running one.
+        CLI and GUI already enforce before running one. `client_name` (who the test is
+        for) is stored with a dated authorisation record on the scan.
         """
         scan_type = "device" if run.device_serial else "apk"
 
@@ -421,6 +428,13 @@ class ApiClient:
             "findings": [self._finding_to_payload(f) for f in run.ranked()],
             "toolVersion": tool_version,
         }
+        if authorised:
+            payload["authorisation"] = {
+                "client": client_name or None,
+                "target": run.package or apk_file_name,
+                "statement": "Tester confirmed they own the app or hold permission to test it.",
+                "at": _iso(time.time()),
+            }
         if run.started_at:
             payload["startedAt"] = _iso(run.started_at)
         if run.finished_at:

@@ -110,6 +110,14 @@ export async function createScan(user, payload) {
     },
     toolVersion: payload.toolVersion ?? null,
     authorisationConfirmed: payload.authorisationConfirmed === true,
+    authorisation: payload.authorisation
+      ? {
+          client: payload.authorisation.client ?? null,
+          target: payload.authorisation.target ?? null,
+          statement: payload.authorisation.statement ?? null,
+          at: payload.authorisation.at ?? null,
+        }
+      : null,
     findings,
     counts: countBySeverity(findings),
     findingCount: findings.length,
