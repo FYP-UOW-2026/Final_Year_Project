@@ -53,5 +53,28 @@ export async function listForOrganisation(organisationId, { limit = 100, action 
   if (action) query = query.where("action", "==", action);
 
   const snap = await query.get();
-  return snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  return withPeople(snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
+}
+
+/**
+ * Name the people in each entry by email, so the log reads "who did what to whom".
+ *
+ * Entries store uids, which mean nothing to a reader. They are resolved at read time, so
+ * an entry shows the address an account has now; for an account since deleted there is
+ * no profile left, and the email captured in the entry's metadata (if any) stands in.
+ */
+async function withPeople(entries) {
+  const uids = [...new Set(entries.flatMap((e) => [e.actorId, e.subjectId]).filter(Boolean))];
+  const emails = new Map();
+  if (uids.length) {
+    const refs = uids.map((uid) => db.collection(COLLECTIONS.USERS).doc(uid));
+    for (const snap of await db.getAll(...refs)) {
+      if (snap.exists) emails.set(snap.id, snap.data().email ?? null);
+    }
+  }
+  return entries.map((e) => ({
+    ...e,
+    actorEmail: emails.get(e.actorId) ?? null,
+    subjectEmail: emails.get(e.subjectId) ?? e.metadata?.email ?? null,
+  }));
 }

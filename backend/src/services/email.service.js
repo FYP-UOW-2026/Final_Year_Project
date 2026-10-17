@@ -271,9 +271,9 @@ export function sendRemovedFromOrganisation({ to, organisationName }) {
     text: [
       `Your BioAudit account is no longer linked to ${organisationName}.`,
       "",
-      "Your account itself is unaffected: it still exists, you keep your own free or",
-      "premium status, and your assessment history stays with you. The organisation's",
-      "administrators can no longer see it.",
+      "Your account still exists and is now a personal student account. Your assessment",
+      "history stays with you, though a student account keeps only your most recent",
+      "runs. The organisation's administrators can no longer see it.",
     ].join("\n"),
   });
 }

@@ -1,5 +1,5 @@
 /**
- * Report export. Premium only.
+ * Report export. Team accounts only.
  *
  * The API returns HTML rather than PDF. Producing a PDF needs a headless browser or a
  * rendering engine, which would add a large dependency to every deployment of this
