@@ -35,7 +35,7 @@ from .adb import AdbError
 from .api import ApiClient, ApiClientError
 from .config import Config
 from .models import TestRun
-from .session import default_base_dir, restore_session, save_session
+from .session import default_base_dir, list_accounts, restore_session, save_session, switch_to
 
 _NOT_SIGNED_IN = (
     "Not signed in. BioAudit stores every scan on your account, so run "
@@ -77,6 +77,32 @@ def cmd_logout(args, cfg: Config) -> int:
     from .session import clear_session
     clear_session(base_dir)
     print("Signed out.")
+    return 0
+
+
+def cmd_accounts(args, cfg: Config) -> int:
+    saved = list_accounts(default_base_dir())
+    if not saved:
+        print("No saved accounts. Sign in with `bioaudit login` (without --no-remember).")
+        return 0
+    for acct in saved:
+        print(f"{'*' if acct.active else ' '} {acct.email}")
+    print("\n* = active. Change with `bioaudit switch <email>`.")
+    return 0
+
+
+def cmd_switch(args, cfg: Config) -> int:
+    base_dir = default_base_dir()
+    if args.email not in {a.email for a in list_accounts(base_dir)}:
+        print(f"{args.email} is not a saved account. See `bioaudit accounts`.", file=sys.stderr)
+        return 1
+    client = switch_to(base_dir, args.email, cfg.api["base_url"])
+    if client is None:
+        print(f"The saved sign-in for {args.email} has expired. "
+              "Run `bioaudit login` to sign in again.", file=sys.stderr)
+        return 1
+    print(f"Switched to {client.account.email} ({client.account.tier}"
+          f"{', admin' if client.account.is_admin else ''}).")
     return 0
 
 
@@ -341,6 +367,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     lo = sub.add_parser("logout", help="end the saved session")
     lo.set_defaults(func=cmd_logout)
+
+    ac = sub.add_parser("accounts", help="list saved accounts")
+    ac.set_defaults(func=cmd_accounts)
+
+    sw = sub.add_parser("switch", help="switch to a saved account without a password")
+    sw.add_argument("email")
+    sw.set_defaults(func=cmd_switch)
 
     r = sub.add_parser("register", help="create an account")
     r.add_argument("--email", required=True)

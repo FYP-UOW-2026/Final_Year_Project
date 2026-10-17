@@ -668,8 +668,48 @@ def run(cfg: Config | None = None) -> int:
             self.history_open_report_btn.setEnabled(bool(self.api) and history_ok)
             self.history_save_report_btn.setToolTip(tooltip)
 
+        def _switch_to_saved(self) -> "bool | None":
+            """Offer the other saved accounts. Returns True if switched, False if the user
+            wants a password sign-in instead, None if they cancelled."""
+            from PySide6.QtWidgets import QApplication, QInputDialog
+            from .signin import list_accounts, switch_to
+
+            current = self.api.account.email if self.api and self.api.account else None
+            others = [a for a in list_accounts(self._session_dir) if a.email != current]
+            if not others:
+                return False
+
+            add_new = "Add another account…"
+            choice, ok = QInputDialog.getItem(
+                self, "Switch account", "Saved accounts:",
+                [a.email for a in others] + [add_new], 0, False)
+            if not ok:
+                return None
+            if choice == add_new:
+                return False
+
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                client = switch_to(self._session_dir, choice, self.cfg.api["base_url"])
+            finally:
+                QApplication.restoreOverrideCursor()
+            if client is None:
+                self.statusBar().showMessage(
+                    f"The saved sign-in for {choice} expired. Enter the password again.")
+                return False
+
+            self.api = client
+            self.cfg.api["enabled"] = True
+            self._refresh_account_ui()
+            self.statusBar().showMessage(f"Switched to {client.account.email}")
+            return True
+
         def _sign_in(self) -> None:
             from .signin import show_signin_dialog
+
+            switched = self._switch_to_saved()
+            if switched is not False:
+                return
 
             client, _remember = show_signin_dialog(
                 self, base_url=self.cfg.api["base_url"], base_dir=self._session_dir
