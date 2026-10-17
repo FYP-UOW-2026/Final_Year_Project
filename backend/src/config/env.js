@@ -226,8 +226,9 @@ export const env = {
 
   limits: {
     freeHistory: int("FREE_HISTORY_LIMIT", 10),
-    // Free-tier ceiling on AI explanations per calendar month. Premium is uncapped, so
-    // there is no matching setting for it. This is a BioAudit-side courtesy limit, not
+    // History kept by a student account (a team account keeps everything), and its
+    // ceiling on AI explanations per calendar month. Team accounts are uncapped, so
+    // there is no matching setting for them. This is a BioAudit-side courtesy limit, not
     // a mirror of Groq's own per-account quota -- the two are independent, and it is
     // possible to exhaust either one first.
     freeAiPerMonth: int("FREE_AI_MONTHLY_LIMIT", 20),

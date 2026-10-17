@@ -66,6 +66,9 @@ hiddenimports += [
 
 # Ship the bundled config (including config.example.yaml) alongside the exe.
 datas += [("config", "config")]
+# Bundled UI fonts (IBM Plex Sans, JetBrains Mono) and their OFL licences, loaded by
+# theme.load_fonts() from the same relative path inside the frozen app.
+datas += [("bioaudit/gui/fonts", "bioaudit/gui/fonts")]
 
 
 a = Analysis(

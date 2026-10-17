@@ -37,7 +37,7 @@ def main() -> None:
 
     account = client.account
     st.caption(
-        f"Signed in as **{account.email}** · {account.tier} plan"
+        f"Signed in as **{account.email}** · {account.tier} account"
         + (" · admin" if account.is_admin else "")
     )
 
@@ -57,7 +57,7 @@ def main() -> None:
 
     limit = data.get("historyLimit")
     if limit is not None:
-        st.caption(f"Your plan keeps the newest {limit} runs; upgrade for the full history.")
+        st.caption(f"A student account keeps the newest {limit} runs; team accounts keep all of them.")
 
     st.subheader("Runs")
     rows = [

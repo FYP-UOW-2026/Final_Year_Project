@@ -23,6 +23,8 @@ _DARK_CSS = (
 
 def render_html(run: TestRun, dark: bool = False) -> str:
     """`dark=True` is for the dark on-screen viewer only; exported files stay light."""
+    if dark:
+        return _render_screen(run)
     counts = run.counts()
     rows = []
     for f in run.ranked():
@@ -109,3 +111,77 @@ def _render_attack_path(finding) -> str:
         return ""
     steps = "".join(f"<li>{html.escape(step)}</li>" for step in finding.attack_path)
     return f'<div class="evidence"><em>Attack path:</em><ol>{steps}</ol></div>'
+
+
+def _render_screen(run: TestRun) -> str:
+    """The report as shown inside the desktop app's results pane.
+
+    That pane is a Qt QTextBrowser, which supports only part of HTML and CSS: it ignores
+    rem units, and padding or borders on a div. The browser layout above relies on all
+    three, so on screen every finding ran into the next. Here each finding is a one-cell
+    table, which Qt does pad and frame, with inline styles only. Exported files and
+    "Open full report" keep the browser layout.
+    """
+    from ..gui.theme import DARK as p, SEVERITY_COLOURS
+
+    def esc(value) -> str:
+        return html.escape(str(value))
+
+    def badge(severity: str, text: str) -> str:
+        colour = SEVERITY_COLOURS.get(severity.lower(), SEVERITY_COLOURS["info"])
+        return (f'<span style="background-color:{colour};color:#ffffff;font-weight:600">'
+                f'&nbsp;{esc(text)}&nbsp;</span>')
+
+    def field(label: str, value) -> str:
+        if not value:
+            return ""
+        return (f'<p style="margin:10px 0 0 0"><span style="color:{p["muted"]};font-weight:600">'
+                f'{label}</span><br><span style="color:{p["text"]}">{esc(value)}</span></p>')
+
+    def card(inner: str) -> str:
+        return (f'<table width="100%" cellspacing="0" cellpadding="14" border="1" '
+                f'style="border-color:{p["border"]};border-style:solid" bgcolor="{p["surface"]}">'
+                f'<tr><td>{inner}</td></tr></table>'
+                f'<p style="margin:0;font-size:5pt">&nbsp;</p>')
+
+    counts = run.counts()
+    # Most severe first; counts() runs Info to Critical.
+    chips = "&nbsp;&nbsp;".join(badge(k, f"{v} {k}")
+                                for k, v in reversed(list(counts.items())) if v)
+    meta = [("Package", run.package), ("Device model", run.device_model),
+            ("App version", run.app_version), ("Android version", run.android_version),
+            ("Login state", run.login_state)]
+    scope_rows = "".join(
+        f'<tr><td style="color:{p["muted"]};padding-right:16px">{label}</td>'
+        f'<td style="color:{p["text"]}">{esc(value)}</td></tr>'
+        for label, value in meta if value)
+    tests = "".join(f"<li>{esc(t)}</li>" for t in run.tests_performed)
+    scope = (f'<p style="margin:0;color:{p["text"]};font-weight:600">Test scope</p>'
+             f'<table cellspacing="0" cellpadding="2" style="margin-top:6px">{scope_rows}</table>'
+             + (f'<p style="margin:8px 0 0 0;color:{p["muted"]};font-weight:600">Tests performed</p>'
+                f'<ul style="margin-top:2px;color:{p["text"]}">{tests}</ul>' if tests else ""))
+
+    findings = []
+    for f in run.ranked():
+        detail = " · ".join(x for x in (", ".join(f.owasp), f.confidence, f.component) if x)
+        path = ""
+        if f.attack_path:
+            steps = "".join(f"<li>{esc(s)}</li>" for s in f.attack_path)
+            path = (f'<p style="margin:10px 0 0 0;color:{p["muted"]};font-weight:600">Attack path</p>'
+                    f'<ol style="margin-top:2px;color:{p["text"]}">{steps}</ol>')
+        findings.append(card(
+            f'<p style="margin:0">{badge(f.severity.label, f.severity.label)}&nbsp;&nbsp;'
+            f'<span style="font-size:11pt;font-weight:600;color:{p["text"]}">{esc(f.title)}</span></p>'
+            f'<p style="margin:4px 0 0 0;color:{p["muted"]};font-size:9pt">{esc(detail)}</p>'
+            + field("Evidence", f.evidence) + field("Explanation", f.explanation)
+            + field("Mitigation", f.mitigation) + path))
+
+    return (f'<div style="font-family:\'IBM Plex Sans\',\'Segoe UI\',Arial,sans-serif">'
+            f'<p style="margin:0;font-size:15pt;font-weight:700;color:{p["text"]}">'
+            f'BioAudit Security Report</p>'
+            f'<p style="margin:4px 0 10px 0;color:{p["muted"]}">{esc(run.package)} · generated '
+            f'{datetime.now():%d %b %Y, %H:%M}</p>'
+            f'<p style="margin:0 0 12px 0">{chips or "No findings."}</p>'
+            + card(scope)
+            + "".join(findings or [f'<p style="color:{p["muted"]}">No findings.</p>'])
+            + "</div>")

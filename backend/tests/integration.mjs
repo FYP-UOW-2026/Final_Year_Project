@@ -2,7 +2,7 @@
  * Integration tests against the Firebase emulator suite.
  *
  * These cover everything the offline smoke test cannot: real registration, sign-in,
- * Firestore reads and writes, tier limits, and the whole organisation workflow. Nothing
+ * Firestore reads and writes, student and team limits, and the whole organisation workflow. Nothing
  * here touches a live Firebase project.
  *
  * Run with:  npm run test:integration
@@ -99,7 +99,7 @@ const unique = () => Math.random().toString(36).slice(2, 8);
 
 group("Registration and sign-in");
 
-// A university address, since the free plan is for verified students.
+// A university address, since personal accounts are for verified students.
 const userEmail = `dev-${unique()}@example.ac.uk`;
 const userPassword = "correct-horse-battery";
 let userToken;
@@ -111,10 +111,10 @@ await check("registering creates the account and returns a usable session", asyn
   });
   assert.equal(status, 201, JSON.stringify(body));
   assert.equal(body.user.email, userEmail);
-  assert.equal(body.user.tier, "free");
+  assert.equal(body.user.tier, "student");
   assert.equal(body.user.role, "member");
   assert.ok(body.session.idToken, "expected an idToken");
-  // A code is issued at registration for a free account at a university address.
+  // A code is issued at registration for a student account at a university address.
   assert.equal(body.user.studentVerification.status, "pending");
   assert.equal(body.user.studentVerification.required, true);
   assert.equal(body.user.studentVerification.eligible, true);
@@ -260,7 +260,7 @@ await check("a code stops working after too many wrong guesses", async () => {
   assert.equal(status, 429, "the right code must not work once the attempts are used up");
 });
 
-await check("a free account without a university address is told the plan is for students", async () => {
+await check("a student account without a university address is told it is for students", async () => {
   const reg = await call("POST", "/auth/register", {
     body: { email: `hobbyist-${unique()}@example.com`, password: "hobbyist-password-1" },
   });
@@ -273,7 +273,7 @@ await check("a free account without a university address is told the plan is for
 
   const scan = await call("POST", "/scans", { token, body: minimalScan });
   assert.equal(scan.status, 403);
-  assert.match(scan.body.error.message, /free plan is for students/i);
+  assert.match(scan.body.error.message, /personal accounts are for students/i);
 });
 
 // --- scans and history ----------------------------------------------------
@@ -330,8 +330,8 @@ await check("history comes back newest first", async () => {
   const { status, body } = await call("GET", "/scans", { token: userToken });
   assert.equal(status, 200, JSON.stringify(body));
   assert.ok(body.scans.length >= 1);
-  assert.equal(body.tier, "free");
-  assert.equal(body.historyLimit, 3, "the free limit should be reported");
+  assert.equal(body.tier, "student");
+  assert.equal(body.historyLimit, 3, "the student limit should be reported");
 });
 
 await check("a stored scan can be fetched with its findings", async () => {
@@ -341,7 +341,7 @@ await check("a stored scan can be fetched with its findings", async () => {
   assert.equal(body.scan.findings[0].category, "exported-auth-bypass");
 });
 
-await check("the free tier trims the oldest scan once past its limit", async () => {
+await check("a student account trims the oldest scan once past its limit", async () => {
   // The limit is 3 for this run, and one scan already exists. Saving three more should
   // push the total over and drop the oldest.
   for (let i = 0; i < 3; i += 1) {
@@ -353,7 +353,7 @@ await check("the free tier trims the oldest scan once past its limit", async () 
   }
 
   const { body } = await call("GET", "/scans", { token: userToken });
-  assert.equal(body.scans.length, 3, "a free account should keep only 3 scans");
+  assert.equal(body.scans.length, 3, "a student account should keep only 3 scans");
 
   const gone = await call("GET", `/scans/${firstScanId}`, { token: userToken });
   assert.equal(gone.status, 404, "the oldest scan should have been removed");
@@ -364,212 +364,24 @@ await check("trimming takes the removed scans off the scan count", async () => {
   assert.equal(profile.data().scanCount, 3, "scanCount should match the 3 scans kept");
 });
 
-await check("comparing scans is refused on a free account", async () => {
+await check("comparing scans is refused on a student account", async () => {
   const { body: list } = await call("GET", "/scans", { token: userToken });
   const [a, b] = list.scans;
   const { status } = await call("GET", `/scans/compare/results?baseline=${b.id}&current=${a.id}`, {
     token: userToken,
   });
-  assert.equal(status, 402, "a paid feature should return 402 on the free tier");
+  assert.equal(status, 403, "a team-only feature should be refused to a student");
 });
 
-await check("exporting a report is refused on a free account", async () => {
+await check("exporting a report is refused on a student account", async () => {
   const { body: list } = await call("GET", "/scans", { token: userToken });
   const { status } = await call("GET", `/scans/${list.scans[0].id}/report`, { token: userToken });
-  assert.equal(status, 402);
+  assert.equal(status, 403);
 });
 
-// --- premium --------------------------------------------------------------
-
-group("Premium features");
-
-await check("upgrading to premium changes the tier", async () => {
-  const { status, body } = await call("POST", "/subscription/upgrade", {
-    token: userToken,
-    body: {},
-  });
-  assert.equal(status, 200, JSON.stringify(body));
-  assert.equal(body.user.tier, "premium");
-});
-
-await check("the old token stops working once the tier changes", async () => {
-  // Changing tier revokes sessions on purpose, so a token issued before the change
-  // cannot keep using the old permissions.
-  const { status } = await call("GET", "/users/me", { token: userToken });
-  assert.equal(status, 401, "the pre-upgrade token should have been revoked");
-});
-
-await check("signing in again returns a token carrying the premium tier", async () => {
-  const { status, body } = await call("POST", "/auth/login", {
-    body: { email: userEmail, password: userPassword },
-  });
-  assert.equal(status, 200, JSON.stringify(body));
-  assert.equal(body.user.tier, "premium");
-  userToken = body.session.idToken;
-});
-
-await check("premium keeps history beyond the free limit", async () => {
-  for (let i = 0; i < 3; i += 1) {
-    await call("POST", "/scans", {
-      token: userToken,
-      body: scanPayload(`com.premium.app${i}`, [sampleFinding]),
-    });
-  }
-  const { body } = await call("GET", "/scans", { token: userToken });
-  assert.ok(body.scans.length > 3, `expected more than 3 scans, got ${body.scans.length}`);
-  assert.equal(body.historyLimit, null, "premium should report no limit");
-});
-
-let premiumScanA;
-let premiumScanB;
-
-await check("comparing two scans reports what changed", async () => {
-  const a = await call("POST", "/scans", {
-    token: userToken,
-    body: scanPayload("com.compare.app", [
-      sampleFinding,
-      { ...sampleFinding, category: "logcat-leak", severity: "high", component: null },
-    ]),
-  });
-  const b = await call("POST", "/scans", {
-    token: userToken,
-    body: scanPayload("com.compare.app", [
-      sampleFinding, // still present
-      { ...sampleFinding, category: "allow-backup", severity: "medium", component: null }, // new
-    ]),
-  });
-  premiumScanA = a.body.scan.id;
-  premiumScanB = b.body.scan.id;
-
-  const { status, body } = await call(
-    "GET",
-    `/scans/compare/results?baseline=${premiumScanA}&current=${premiumScanB}`,
-    { token: userToken }
-  );
-  assert.equal(status, 200, JSON.stringify(body));
-  assert.equal(body.comparison.summary.unchanged, 1);
-  assert.equal(body.comparison.summary.resolved, 1, "logcat-leak should read as resolved");
-  assert.equal(body.comparison.summary.introduced, 1, "allow-backup should read as introduced");
-});
-
-await check("exporting a report returns HTML with the findings in it", async () => {
-  const res = await fetch(`${BASE}/scans/${premiumScanB}/report`, {
-    headers: { Authorization: `Bearer ${userToken}` },
-  });
-  assert.equal(res.status, 200);
-  assert.match(res.headers.get("content-type") || "", /html/);
-  const html = await res.text();
-  assert.match(html, /com\.compare\.app/);
-  assert.match(html, /CRITICAL/);
-});
-
-await check("viewing a report inline does not persist a reports document", async () => {
-  const before = await db.collection(COLLECTIONS.REPORTS).where("scanId", "==", premiumScanB).get();
-  await fetch(`${BASE}/scans/${premiumScanB}/report`, {
-    headers: { Authorization: `Bearer ${userToken}` },
-  });
-  const after = await db.collection(COLLECTIONS.REPORTS).where("scanId", "==", premiumScanB).get();
-  assert.equal(after.size, before.size, "an inline view should not create a reports document");
-});
-
-await check("downloading a report saves it to the reports collection", async () => {
-  const res = await fetch(`${BASE}/scans/${premiumScanB}/report?download=true`, {
-    headers: { Authorization: `Bearer ${userToken}` },
-  });
-  assert.equal(res.status, 200);
-  assert.match(res.headers.get("content-disposition") || "", /attachment/);
-
-  // The save is fire-and-forget in the route, so give it a moment to land.
-  await new Promise((resolve) => setTimeout(resolve, 500));
-
-  const snap = await db.collection(COLLECTIONS.REPORTS).where("scanId", "==", premiumScanB).get();
-  assert.ok(snap.size >= 1, "expected at least one saved report for this scan");
-  const doc = snap.docs[snap.docs.length - 1].data();
-  assert.equal(doc.format, "html");
-  assert.equal(doc.fileName, `bioaudit-${premiumScanB}.html`);
-  assert.match(doc.html, /com\.compare\.app/);
-});
-
-await check("download=false shows the report inline and saves nothing", async () => {
-  const reportsFor = () =>
-    db.collection(COLLECTIONS.REPORTS).where("scanId", "==", premiumScanB).get();
-  const before = await reportsFor();
-  const res = await fetch(`${BASE}/scans/${premiumScanB}/report?download=false`, {
-    headers: { Authorization: `Bearer ${userToken}` },
-  });
-  assert.equal(res.status, 200);
-  assert.doesNotMatch(res.headers.get("content-disposition") || "", /attachment/);
-
-  // Same wait as the download test, so a stray save would have had time to land.
-  await new Promise((resolve) => setTimeout(resolve, 500));
-  const after = await reportsFor();
-  assert.equal(after.size, before.size, "download=false must not save a report");
-});
-
-await check("an unrecognised download value is refused", async () => {
-  const { status } = await call("GET", `/scans/${premiumScanB}/report?download=yes`, {
-    token: userToken,
-  });
-  assert.equal(status, 400);
-});
-
-await check("deleting a scan also deletes its saved report exports", async () => {
-  const reportsFor = () =>
-    db.collection(COLLECTIONS.REPORTS).where("scanId", "==", premiumScanB).get();
-  assert.ok((await reportsFor()).size >= 1, "expected the export saved by the download test");
-
-  const { status } = await call("DELETE", `/scans/${premiumScanB}`, { token: userToken });
-  assert.equal(status, 200);
-  assert.equal((await reportsFor()).size, 0, "the scan's exports should be gone with it");
-});
-
-await check("cancelling the subscription drops back to free and warns about trimming", async () => {
-  const { status, body } = await call("POST", "/subscription/cancel", {
-    token: userToken,
-    body: { confirm: "CANCEL", reason: "testing" },
-  });
-  assert.equal(status, 200, JSON.stringify(body));
-  assert.equal(body.user.tier, "free");
-  assert.ok(body.warning, "expected a warning that history will be trimmed");
-  assert.match(body.warning, /export anything you need first/);
-});
-
-await check("after a downgrade, trimming removes the trimmed scans' exports and fixes the count", async () => {
-  // Cancelling revoked the old token, so sign in again as the now-free account.
-  const relogin = await call("POST", "/auth/login", {
-    body: { email: userEmail, password: userPassword },
-  });
-  userToken = relogin.body.session.idToken;
-
-  // Plant an export for a scan that the trim below will remove. Exports can only be made
-  // on premium, which this account no longer is.
-  await db.collection(COLLECTIONS.REPORTS).add({
-    userId: userUid,
-    scanId: premiumScanA,
-    format: "html",
-    html: "<p>planted</p>",
-  });
-
-  // Three new scans leave premiumScanA outside the newest 3, along with every other
-  // older scan, so several are trimmed in one go.
-  for (let i = 0; i < 3; i += 1) {
-    const { status, body } = await call("POST", "/scans", {
-      token: userToken,
-      body: scanPayload(`com.downgraded.app${i}`, [sampleFinding]),
-    });
-    assert.equal(status, 201, JSON.stringify(body));
-  }
-
-  const scans = await db.collection(COLLECTIONS.SCANS).where("userId", "==", userUid).get();
-  assert.equal(scans.size, 3, "a free account should be trimmed back to 3 scans");
-
-  const gone = await db.collection(COLLECTIONS.SCANS).doc(premiumScanA).get();
-  assert.ok(!gone.exists, "premiumScanA should have been trimmed");
-  const exports = await db.collection(COLLECTIONS.REPORTS).where("scanId", "==", premiumScanA).get();
-  assert.equal(exports.size, 0, "a trimmed scan's exports should be removed too");
-
-  const profile = await db.collection(COLLECTIONS.USERS).doc(userUid).get();
-  assert.equal(profile.data().scanCount, scans.size, "scanCount should match the scans kept");
+await check("there is no subscription to buy or cancel", async () => {
+  const upgrade = await call("POST", "/subscription/upgrade", { token: userToken, body: {} });
+  assert.equal(upgrade.status, 404, "the upgrade endpoint should be gone");
 });
 
 await check("clearing the whole history removes every report export too", async () => {
@@ -725,6 +537,18 @@ await check("an admin sees a member's scan summaries but not their findings", as
   assert.ok(body.scans[0].counts, "but the counts should be visible");
 });
 
+await check("an admin can open a member's run, even one saved before they joined", async () => {
+  const opened = await call("GET", `/scans/${memberScanId}`, { token: adminToken });
+  assert.equal(opened.status, 200, JSON.stringify(opened.body));
+  assert.equal(opened.body.scan.findings.length, 1);
+
+  // A run saved before joining carries no organisation. It is listed for the admin, so
+  // it must open too; the flag checks below then run against this unstamped run.
+  await db.collection("scans").doc(memberScanId).update({ organisationId: null });
+  const preJoin = await call("GET", `/scans/${memberScanId}`, { token: adminToken });
+  assert.equal(preJoin.status, 200, JSON.stringify(preJoin.body));
+});
+
 await check("reading a member's data is written to the audit log", async () => {
   const { status, body } = await call("GET", `/organisations/${orgId}/audit`, {
     token: adminToken,
@@ -734,6 +558,100 @@ await check("reading a member's data is written to the audit log", async () => {
   assert.ok(actions.includes("member.data_viewed"), `audit actions were: ${actions.join(", ")}`);
   assert.ok(actions.includes("member.invited"));
   assert.ok(actions.includes("member.joined"));
+
+  // Each entry names who acted and who it affected, by email rather than uid.
+  const viewed = body.entries.find((e) => e.action === "member.data_viewed");
+  assert.equal(viewed.actorEmail, adminEmail);
+  assert.equal(viewed.subjectEmail, "invitee@example.com");
+});
+
+await check("a team member's account reports the team tier and no limits", async () => {
+  const { status, body } = await call("GET", "/users/me", { token: memberToken });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.user.tier, "team");
+  assert.equal(body.user.aiQuota.limit, null, "a team account has no AI cap");
+});
+
+await check("a team member keeps history beyond the student limit", async () => {
+  for (let i = 0; i < 3; i += 1) {
+    await call("POST", "/scans", {
+      token: memberToken,
+      body: scanPayload(`com.team.app${i}`, [sampleFinding]),
+    });
+  }
+  const { body } = await call("GET", "/scans", { token: memberToken });
+  assert.ok(body.scans.length > 3, `expected more than 3 scans, got ${body.scans.length}`);
+  assert.equal(body.historyLimit, null, "a team account should report no limit");
+});
+
+let teamScanA;
+let teamScanB;
+
+await check("comparing two scans reports what changed", async () => {
+  const a = await call("POST", "/scans", {
+    token: memberToken,
+    body: scanPayload("com.compare.app", [
+      sampleFinding,
+      { ...sampleFinding, category: "logcat-leak", severity: "high", component: null },
+    ]),
+  });
+  const b = await call("POST", "/scans", {
+    token: memberToken,
+    body: scanPayload("com.compare.app", [
+      sampleFinding, // still present
+      { ...sampleFinding, category: "allow-backup", severity: "medium", component: null }, // new
+    ]),
+  });
+  teamScanA = a.body.scan.id;
+  teamScanB = b.body.scan.id;
+
+  const { status, body } = await call(
+    "GET",
+    `/scans/compare/results?baseline=${teamScanA}&current=${teamScanB}`,
+    { token: memberToken }
+  );
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.comparison.summary.unchanged, 1);
+  assert.equal(body.comparison.summary.resolved, 1, "logcat-leak should read as resolved");
+  assert.equal(body.comparison.summary.introduced, 1, "allow-backup should read as introduced");
+});
+
+await check("exporting a report returns HTML with the findings in it", async () => {
+  const res = await fetch(`${BASE}/scans/${teamScanB}/report`, {
+    headers: { Authorization: `Bearer ${memberToken}` },
+  });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type") || "", /html/);
+  const html = await res.text();
+  assert.match(html, /com\.compare\.app/);
+  assert.match(html, /CRITICAL/);
+});
+
+await check("viewing a report inline does not persist a reports document", async () => {
+  const before = await db.collection(COLLECTIONS.REPORTS).where("scanId", "==", teamScanB).get();
+  await fetch(`${BASE}/scans/${teamScanB}/report`, {
+    headers: { Authorization: `Bearer ${memberToken}` },
+  });
+  const after = await db.collection(COLLECTIONS.REPORTS).where("scanId", "==", teamScanB).get();
+  assert.equal(after.size, before.size, "an inline view should not create a reports document");
+});
+
+await check("downloading a report saves it to the reports collection", async () => {
+  const res = await fetch(`${BASE}/scans/${teamScanB}/report?download=true`, {
+    headers: { Authorization: `Bearer ${memberToken}` },
+  });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-disposition") || "", /attachment/);
+
+  // The save is fire-and-forget in the route, so give it a moment to land.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+
+  const snap = await db.collection(COLLECTIONS.REPORTS).where("scanId", "==", teamScanB).get();
+  assert.ok(snap.size >= 1, "expected at least one saved report for this scan");
+  const doc = snap.docs[snap.docs.length - 1].data();
+  assert.equal(doc.format, "html");
+  assert.equal(doc.fileName, `bioaudit-${teamScanB}.html`);
+  assert.match(doc.html, /com\.compare\.app/);
 });
 
 let flagId;
@@ -805,6 +723,9 @@ await check("removing a member leaves their account and scans intact", async () 
 
   const stillThere = await db.collection("scans").doc(memberScanId).get();
   assert.ok(stillThere.exists, "their scans should not have been deleted");
+
+  const opened = await call("GET", `/scans/${memberScanId}`, { token: adminToken });
+  assert.equal(opened.status, 403, "a removed member's runs are no longer the admin's to read");
 });
 
 await check("after removal the admin can no longer read or flag that person's scans", async () => {

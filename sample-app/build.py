@@ -2,7 +2,7 @@
 
 Uses the Android SDK's own tools — aapt2, d8, zipalign, apksigner — plus javac.
 Everything compiles in a temporary space-free directory because the Android .bat
-tools mishandle spaces in paths (this repo lives under "…/Claude code/…").
+tools mishandle spaces in paths (a clone can live under a folder like "…/My Projects/…").
 
     python sample-app/build.py                 # build -> sample-app/dist/vulndemo.apk
     python sample-app/build.py --install        # build, then `adb install -r`

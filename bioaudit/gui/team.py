@@ -11,9 +11,10 @@ cursor rather than through the worker machinery the scans use. That keeps the co
 readable at the cost of a brief pause. The client's timeout bounds the worst case, so a
 dead server fails with a message instead of hanging forever.
 
-A note on privacy: the members view deliberately shows only that a member ran a scan and
-how many problems it found. The server does not return their findings to an admin, because
-the product promises an app's code never leaves the machine it was scanned on.
+A note on privacy: a member's run list shows only summaries, and an admin reads a run's
+findings by opening it on purpose. The server allows that only while the run's owner is a
+member of the admin's organisation and records every read in the activity log. Findings
+are evidence, not code: an app's code never leaves the machine it was scanned on.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from __future__ import annotations
 from typing import Optional
 
 from ..api import ApiClient, ApiClientError
+from .formatting import format_when
 from .theme import SEVERITY_COLOURS
 
 # The Status cell's text for a blocked account. Named because it is both written into
@@ -34,7 +36,7 @@ def _run_labels(scans: list[dict]) -> list[str]:
     for s in scans:
         target = s.get("target") or {}
         name = target.get("packageName") or target.get("apkFileName") or "unknown"
-        labels.append(f"{str(s.get('createdAt', ''))[:19]}  {name}")
+        labels.append(f"{format_when(s.get('createdAt'))}  ·  {name}")
     return labels
 
 
@@ -222,7 +224,7 @@ def make_team_tab(parent_window, palette: dict):
             layout = QVBoxLayout(w)
 
             self.members_table = _table(
-                ["Email", "Name", "Plan", "Role", "Scans", "Status"])
+                ["Email", "Name", "Role", "Scans", "Status"])
             self.members_table.itemSelectionChanged.connect(self._member_selection_changed)
             layout.addWidget(self.members_table, 1)
 
@@ -266,10 +268,10 @@ def make_team_tab(parent_window, palette: dict):
                 b.setEnabled(enabled)
 
             row = self.members_table.currentRow()
-            role = self.members_table.item(row, 3).text() if row >= 0 else ""
+            role = self.members_table.item(row, 2).text() if row >= 0 else ""
             self.make_admin_btn.setEnabled(enabled and role != "admin")
 
-            suspended = self.members_table.item(row, 5).text() == _SUSPENDED if row >= 0 else False
+            suspended = self.members_table.item(row, 4).text() == _SUSPENDED if row >= 0 else False
             self.suspend_btn.setEnabled(enabled)
             self.suspend_btn.setText("Reinstate" if suspended else "Suspend")
 
@@ -280,7 +282,6 @@ def make_team_tab(parent_window, palette: dict):
                 rows.append([
                     m.get("email", ""),
                     m.get("displayName") or "",
-                    m.get("tier", ""),
                     m.get("role", ""),
                     str(m.get("scanCount", 0)),
                     _SUSPENDED if m.get("disabled") else "active",
@@ -312,7 +313,7 @@ def make_team_tab(parent_window, palette: dict):
                     f"{k[0].upper()}{v}" for k, v in counts.items() if v) or "no findings"
                 target = (s.get("target") or {})
                 label = target.get("packageName") or target.get("apkFileName") or "unknown"
-                when = str(s.get("createdAt", ""))[:19]
+                when = format_when(s.get("createdAt"))
                 lines.append(f"{when}   {label}   {summary}")
 
             dialog = QDialog(self)
@@ -383,7 +384,7 @@ def make_team_tab(parent_window, palette: dict):
             dialog.setMinimumSize(760, 560)
             dl = QVBoxLayout(dialog)
             note = QLabel(
-                f"<b>{label}</b> &nbsp; {str(full.get('createdAt', ''))[:19]}<br>"
+                f"<b>{label}</b> &nbsp; {format_when(full.get('createdAt'))}<br>"
                 f"<span style='color:{palette['muted']}'>Read-only. Opening this run has been "
                 f"recorded in the activity log.</span>")
             note.setTextFormat(Qt.RichText)
@@ -489,7 +490,7 @@ def make_team_tab(parent_window, palette: dict):
                 return
             row = self.members_table.currentRow()
             email = self.members_table.item(row, 0).text()
-            suspended_now = self.members_table.item(row, 5).text() == _SUSPENDED
+            suspended_now = self.members_table.item(row, 4).text() == _SUSPENDED
             suspend = not suspended_now
 
             if suspend:
@@ -597,14 +598,11 @@ def make_team_tab(parent_window, palette: dict):
             invites = self.client.list_invitations(self.org_id, status="all")
             rows, keys = [], []
             for inv in invites:
-                expires = inv.get("expiresAt")
-                if isinstance(expires, dict):           # Firestore timestamp shape
-                    expires = expires.get("_seconds", "")
                 rows.append([
                     inv.get("email", ""),
                     inv.get("role", ""),
                     inv.get("status", ""),
-                    str(expires)[:19],
+                    format_when(inv.get("expiresAt")),
                 ])
                 keys.append(inv.get("id", ""))
             _fill(self.invitations_table, rows, keys)
@@ -760,10 +758,8 @@ def make_team_tab(parent_window, palette: dict):
             flags = self.client.list_flags(self.org_id, status=status)
             rows, keys = [], []
             for f in flags:
-                created = f.get("createdAt")
-                if isinstance(created, dict):
-                    created = created.get("_seconds", "")
-                rows.append([str(created)[:19], f.get("reason", ""), f.get("status", "")])
+                rows.append([format_when(f.get("createdAt")), f.get("reason", ""),
+                             f.get("status", "")])
                 keys.append(f.get("id", ""))
             _fill(self.flags_table, rows, keys)
             self._flag_selection_changed()
@@ -791,7 +787,7 @@ def make_team_tab(parent_window, palette: dict):
         def _audit_tab(self) -> QWidget:
             w = QWidget()
             layout = QVBoxLayout(w)
-            self.audit_table = _table(["When", "Action", "Details"])
+            self.audit_table = _table(["When", "Action", "By", "Affected", "Details"])
             layout.addWidget(self.audit_table, 1)
             note = QLabel(
                 "Every admin action that touches another person is recorded here, and entries "
@@ -809,12 +805,19 @@ def make_team_tab(parent_window, palette: dict):
                 return    # the rest of the tab is still useful without it
             rows = []
             for e in entries:
-                at = e.get("at")
-                if isinstance(at, dict):
-                    at = at.get("_seconds", "")
-                meta = e.get("metadata") or {}
+                # The server names both people by email. An id with no email left is an
+                # account deleted since; one without an id is simply not part of the entry.
+                # A server too old to send the email fields leaves both columns blank.
+                named = "actorEmail" in e
+                by = e.get("actorEmail") or (
+                    "deleted account" if named and e.get("actorId") else "")
+                affected = e.get("subjectEmail") or (
+                    "deleted account" if named and e.get("subjectId") else "")
+                # The affected email is already its own column, so not repeated here.
+                meta = {k: v for k, v in (e.get("metadata") or {}).items() if k != "email"
+                        or v != affected}
                 detail = ", ".join(f"{k}={v}" for k, v in meta.items() if v not in (None, ""))
-                rows.append([str(at)[:19], e.get("action", ""), detail])
+                rows.append([format_when(e.get("at")), e.get("action", ""), by, affected, detail])
             _fill(self.audit_table, rows)
 
     return TeamTab()

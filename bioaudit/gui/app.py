@@ -22,6 +22,7 @@ from ..adb import Adb
 from ..config import Config
 from ..models import TestRun
 from ..report import generator
+from .formatting import format_when, severity_summary
 
 
 def _require_pyside():
@@ -126,10 +127,10 @@ def run(cfg: Config | None = None) -> int:
     _install_crash_logging()
 
     from PySide6.QtCore import Qt, QRect, QSize
-    from PySide6.QtGui import QAction, QBrush, QColor, QDesktopServices, QPainter, QPen
+    from PySide6.QtGui import QAction, QBrush, QColor, QDesktopServices, QIcon, QPainter, QPen
     from PySide6.QtCore import QUrl
     from PySide6.QtWidgets import (
-        QApplication, QCheckBox, QComboBox, QCompleter, QFileDialog, QFormLayout,
+        QApplication, QButtonGroup, QCheckBox, QComboBox, QCompleter, QFileDialog, QFormLayout,
         QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
         QMessageBox, QProgressBar, QPushButton, QTabWidget,
         QTextBrowser, QVBoxLayout, QWidget,
@@ -158,22 +159,26 @@ def run(cfg: Config | None = None) -> int:
         return box, inner
 
     def _tile_button(accent: str, icon: str, title: str, subtitle: str) -> QPushButton:
-        """A big colourful clickable tile, Xbox-dashboard style, for the Home tab.
+        """A large clickable card for the Home tab.
 
         Built from a QPushButton with its own layout of labels rather than the button's
         own text, because a tile needs two font sizes (a bold title, a muted subtitle)
-        that a single QPushButton label can't express.
+        that a single QPushButton label can't express. `icon` names an entry in
+        theme.ICONS, drawn as a vector in the accent colour.
         """
         btn = QPushButton()
         btn.setProperty("tileAccent", accent)
         btn.setCursor(Qt.PointingHandCursor)
-        btn.setFocusPolicy(Qt.NoFocus)  # no dotted focus rect over the gradient
+        # Reachable by Tab like any other control; the stylesheet draws the focus ring.
+        btn.setFocusPolicy(Qt.StrongFocus)
+        btn.setAccessibleName(title)
         btn.setMinimumSize(220, 150)
 
         inner = QVBoxLayout(btn)
         inner.setContentsMargins(18, 16, 18, 16)
         inner.setSpacing(4)
-        icon_label = QLabel(icon)
+        icon_label = QLabel()
+        icon_label.setPixmap(theme.icon_pixmap(icon, theme.DARK["primary"], 30))
         icon_label.setObjectName("tileIcon")
         title_label = QLabel(title)
         title_label.setObjectName("tileTitle")
@@ -303,24 +308,60 @@ def run(cfg: Config | None = None) -> int:
 
             self._build_account_menu()
 
+            # The pages still live in a QTabWidget, so every existing call that switches or
+            # hides a tab keeps working. Its tab bar is hidden: the sidebar is the
+            # navigation now, because a wide desktop window has room for labelled nav
+            # down the side and top tabs read as an afterthought.
             tabs = QTabWidget()
-            tabs.setDocumentMode(True)   # flat tabs, no heavy frame around the pane
+            tabs.setObjectName("pages")
+            tabs.setDocumentMode(True)
+            tabs.tabBar().hide()
             tabs.addTab(self._build_home_tab(), "Home")
-            # Indices kept because the two assessment tabs are hidden for an admin account,
-            # which oversees a team's assessments rather than running its own.
+            # Indices kept because the assessment tabs and History are hidden for an admin
+            # account, which oversees a team's assessments rather than running its own.
             self._scan_tab_index = tabs.addTab(self._build_scan_tab(), "Scan an APK")
             self._assess_tab_index = tabs.addTab(self._build_assess_tab(), "Assess a device")
-            tabs.addTab(self._build_history_tab(), "History")
+            self._history_tab_index = tabs.addTab(self._build_history_tab(), "History")
             self.team_tab = team.make_team_tab(self, self.palette_colours)
             self._team_tab_index = tabs.addTab(self.team_tab, "Team")
             self.tabs = tabs
-            self.setCentralWidget(tabs)
 
-            # Shown on the right of the status bar so the signed-in state is always
-            # visible, rather than hidden behind a menu.
-            self.account_label = QLabel("")
-            self.account_label.setObjectName("accountBadge")
-            self.statusBar().addPermanentWidget(self.account_label)
+            # Title and one-line purpose for whichever page is open, in tab order.
+            self._page_info = [
+                ("Home", "Pick a test to run, or open your past results."),
+                ("Scan an APK", "Read an app file for weak biometric checks. No phone needed."),
+                ("Assess a device", "Test an installed app on a connected phone, over ADB."),
+                ("History", "Past runs saved to your account."),
+                ("Team", "Members, invitations, flagged runs and activity."),
+            ]
+            self.page_title = QLabel("")
+            self.page_title.setObjectName("pageTitle")
+            self.page_subtitle = QLabel("")
+            self.page_subtitle.setObjectName("pageSubtitle")
+            header = QVBoxLayout()
+            header.setContentsMargins(16, 0, 16, 0)
+            header.setSpacing(2)
+            header.addWidget(self.page_title)
+            header.addWidget(self.page_subtitle)
+
+            content = QWidget()
+            column = QVBoxLayout(content)
+            column.setContentsMargins(12, 22, 12, 6)
+            column.setSpacing(0)
+            column.addLayout(header)
+            column.addSpacing(10)
+            column.addWidget(tabs, 1)
+
+            shell = QWidget()
+            row = QHBoxLayout(shell)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(0)
+            row.addWidget(self._build_sidebar())
+            row.addWidget(content, 1)
+            self.setCentralWidget(shell)
+
+            tabs.currentChanged.connect(self._on_page_changed)
+            self._on_page_changed(tabs.currentIndex())
 
             self.statusBar().showMessage("Ready")
             self._restore_saved_session()
@@ -339,6 +380,96 @@ def run(cfg: Config | None = None) -> int:
                 # rather than finding out when a finished scan's upload is refused.
                 from PySide6.QtCore import QTimer
                 QTimer.singleShot(0, self._prompt_student_verification)
+
+        # ---- Shell -------------------------------------------------------- #
+
+        def _build_sidebar(self) -> QFrame:
+            """Brand, one labelled nav item per page, and the signed-in account."""
+            bar = QFrame()
+            bar.setObjectName("sidebar")
+            bar.setFixedWidth(224)
+            layout = QVBoxLayout(bar)
+            layout.setContentsMargins(0, 22, 0, 16)
+            layout.setSpacing(2)
+
+            brand = QHBoxLayout()
+            brand.setContentsMargins(18, 0, 18, 0)
+            brand.setSpacing(10)
+            logo = QLabel()
+            logo.setPixmap(theme.icon_pixmap("shield", theme.DARK["primary"], 28))
+            names = QVBoxLayout()
+            names.setSpacing(0)
+            name = QLabel("BioAudit")
+            name.setObjectName("brandName")
+            tag = QLabel("android biometrics")
+            tag.setObjectName("brandTag")
+            names.addWidget(name)
+            names.addWidget(tag)
+            brand.addWidget(logo)
+            brand.addLayout(names)
+            brand.addStretch(1)
+            layout.addLayout(brand)
+            layout.addSpacing(26)
+
+            heading = QLabel("Menu")
+            heading.setObjectName("navHeading")
+            layout.addWidget(heading)
+            layout.addSpacing(4)
+
+            # In tab order, so a button's id is the index of the page it opens.
+            items = [("home", "Home"), ("scan", "Scan an APK"),
+                     ("assess", "Assess a device"), ("history", "History"),
+                     ("team", "Team")]
+            self.nav_group = QButtonGroup(self)
+            self.nav_group.setExclusive(True)
+            self.nav_buttons = []
+            for index, (icon_name, label) in enumerate(items):
+                btn = QPushButton(label)
+                btn.setObjectName("navItem")
+                btn.setCheckable(True)
+                btn.setCursor(Qt.PointingHandCursor)
+                # Muted when idle, accent when it is the current page.
+                icon = QIcon()
+                icon.addPixmap(theme.icon_pixmap(icon_name, theme.DARK["muted"], 36),
+                               QIcon.Normal, QIcon.Off)
+                icon.addPixmap(theme.icon_pixmap(icon_name, theme.DARK["primary"], 36),
+                               QIcon.Normal, QIcon.On)
+                btn.setIcon(icon)
+                btn.setIconSize(QSize(18, 18))
+                btn.clicked.connect(lambda _checked=False, i=index: self.tabs.setCurrentIndex(i))
+                self.nav_group.addButton(btn, index)
+                self.nav_buttons.append(btn)
+                layout.addWidget(btn)
+
+            layout.addStretch(1)
+            divider = QFrame()
+            divider.setObjectName("sidebarDivider")
+            layout.addWidget(divider)
+            layout.addSpacing(12)
+
+            # Signed-in state stays visible at all times rather than behind a menu.
+            self.account_label = QLabel("")
+            self.account_label.setObjectName("accountBadge")
+            self.account_label.setWordWrap(True)
+            self.account_label.setContentsMargins(18, 0, 18, 0)
+            layout.addWidget(self.account_label)
+            return bar
+
+        def _on_page_changed(self, index: int) -> None:
+            """Keep the header and the highlighted nav item in step with the page."""
+            if 0 <= index < len(self._page_info):
+                title, subtitle = self._page_info[index]
+                self.page_title.setText(title)
+                self.page_subtitle.setText(subtitle)
+            btn = self.nav_group.button(index)
+            if btn is not None:
+                btn.setChecked(True)
+
+        def _sync_nav(self) -> None:
+            """Show a nav item only while its page is available to this account."""
+            for index, btn in enumerate(self.nav_buttons):
+                btn.setVisible(self.tabs.isTabVisible(index))
+            self._on_page_changed(self.tabs.currentIndex())
 
         # ---- Account ------------------------------------------------------ #
 
@@ -367,23 +498,13 @@ def run(cfg: Config | None = None) -> int:
 
             self.action_verify_student = QAction("Verify student email…", self)
             self.action_verify_student.setToolTip(
-                "The free plan is for students: verify your university email to run scans.")
+                "Personal accounts are for students: verify your university email to run scans.")
             self.action_verify_student.triggered.connect(self._verify_student)
             menu.addAction(self.action_verify_student)
 
             self.action_join_org = QAction("Join an organisation…", self)
             self.action_join_org.triggered.connect(self._join_organisation)
             menu.addAction(self.action_join_org)
-
-            menu.addSeparator()
-
-            self.action_upgrade = QAction("Upgrade to premium…", self)
-            self.action_upgrade.triggered.connect(self._upgrade)
-            menu.addAction(self.action_upgrade)
-
-            self.action_cancel_sub = QAction("Cancel subscription…", self)
-            self.action_cancel_sub.triggered.connect(self._cancel_subscription)
-            menu.addAction(self.action_cancel_sub)
 
         def _restore_saved_session(self) -> None:
             """Reuse a stored session if the user asked to stay signed in.
@@ -467,44 +588,55 @@ def run(cfg: Config | None = None) -> int:
             self.action_join_org.setEnabled(signed_in and not account.organisation_id)
             self.action_verify_student.setVisible(
                 signed_in and account.needs_student_verification)
-            self.action_upgrade.setEnabled(signed_in and not account.is_premium)
-            self.action_cancel_sub.setEnabled(signed_in and account.is_premium)
 
-            # Premium-only actions on the History tab.
-            self.compare_btn.setEnabled(signed_in and account.is_premium)
+            # Team-only actions on the History tab.
+            self.compare_btn.setEnabled(signed_in and account.is_team)
             self.compare_btn.setToolTip(
                 "Compare two saved runs to see what was fixed and what is new."
-                if signed_in and account.is_premium
-                else "Comparing runs is part of the premium plan.")
+                if signed_in and account.is_team
+                else "Comparing runs is for team accounts.")
             self._update_save_report_buttons()
 
             # An admin account is an oversight role: it supervises a team's assessments
             # rather than running its own, and the server refuses a scan from one. Hiding
             # the two tabs is what stops that becoming a rejected upload after the work of
             # a full scan has already been done.
+            # History goes too: it lists only the account's own runs, so for an admin it
+            # could never be anything but empty. Members' runs are read from Team instead.
             is_admin = signed_in and account.is_admin
-            for index in (self._scan_tab_index, self._assess_tab_index):
+            own_runs_pages = (self._scan_tab_index, self._assess_tab_index,
+                              self._history_tab_index)
+            for index in own_runs_pages:
                 self.tabs.setTabVisible(index, not is_admin)
-            # Mirror the same gate on the Home tab: an admin oversees a team's assessments
-            # rather than running its own, so the tiles that open those tabs are removed
-            # entirely rather than left as a disabled dead end. History and Team stay put
-            # in their own grid cells (rather than stretching to fill the gap) so they
-            # keep the same size as they have for a non-admin account.
-            for tile in (self.home_scan_tile, self.home_assess_tile):
+            # Mirror the same gate on the Home tab: the tiles that open those pages are
+            # removed entirely rather than left as a disabled dead end. Team is then the
+            # only tile, so it moves to the top row and spans it instead of sitting alone
+            # in the bottom-right cell beside an empty gap.
+            for tile in (self.home_scan_tile, self.home_assess_tile, self.home_history_tile):
                 tile.setVisible(not is_admin)
-            if is_admin and self.tabs.currentIndex() in (
-                self._scan_tab_index, self._assess_tab_index
-            ):
-                self.tabs.setCurrentIndex(self._assess_tab_index + 1)   # History
+            self.home_grid.removeWidget(self.home_team_tile)
+            if is_admin:
+                self.home_grid.addWidget(self.home_team_tile, 0, 0, 1, 2)
+            else:
+                self.home_grid.addWidget(self.home_team_tile, 1, 1)
+            self._page_info[0] = ("Home", "Oversee your team's members and their runs."
+                                  if is_admin else
+                                  "Pick a test to run, or open your past results.")
+            self._on_page_changed(self.tabs.currentIndex())
 
             # Team tools only make sense for an organisation admin -- hide the tab itself
             # for everyone else rather than showing it with a "not an admin" placeholder.
             team_visible = signed_in and account.is_admin and bool(account.organisation_id)
             self.tabs.setTabVisible(self._team_tab_index, team_visible)
+            if is_admin and self.tabs.currentIndex() in own_runs_pages:
+                self.tabs.setCurrentIndex(self._team_tab_index if team_visible else 0)
             if not team_visible and self.tabs.currentIndex() == self._team_tab_index:
-                self.tabs.setCurrentIndex(self._scan_tab_index)
+                self.tabs.setCurrentIndex(0 if is_admin else self._scan_tab_index)
 
             self.team_tab.refresh_visibility()
+            # The Home tile follows the same rule as the page it opens.
+            self.home_team_tile.setVisible(team_visible)
+            self._sync_nav()
             # The History tab has nothing of its own to poll on a timer, so any moment
             # the signed-in account might have changed is also a moment to refresh it.
             self._reload_history()
@@ -512,19 +644,19 @@ def run(cfg: Config | None = None) -> int:
         def _update_save_report_buttons(self) -> None:
             """Single place the three "Save report from account" buttons get their state.
 
-            Enabled whenever there is a scan to save, regardless of plan -- a non-premium
+            Enabled whenever there is a scan to save, regardless of account -- a student's
             click is caught inside the handlers (_save_server_report / _save_history_report)
-            with an upgrade prompt, rather than left as a disabled control someone has to
+            with an explanation, rather than left as a disabled control someone has to
             guess the reason for. Called whenever the account might have changed
             (_refresh_account_ui) and whenever the History selection changes
             (_show_history_run), not just right after a job finishes -- otherwise a run
             saved while signed out stays showing a save button with nothing behind it.
             """
-            premium = bool(self.api and self.api.account and self.api.account.is_premium)
+            team = bool(self.api and self.api.account and self.api.account.is_team)
             tooltip = (
-                "Download this run's report from your account. Part of the premium plan."
-                if premium else
-                "Saving a report from your account is part of the premium plan.")
+                "Download this run's report from your account."
+                if team else
+                "Saving a report from your account is for team accounts.")
 
             for btn in (self.scan_save_report_btn, self.assess_save_report_btn):
                 btn.setEnabled(bool(self.api) and bool(self._last_scan_id))
@@ -586,27 +718,6 @@ def run(cfg: Config | None = None) -> int:
             # sign-in immediately rather than leaving buttons on screen that would fail.
             self._require_signed_in_or_quit()
 
-        def _upgrade(self) -> None:
-            if self.api is None:
-                return
-            confirm = QMessageBox.question(
-                self, "Upgrade to premium",
-                "Premium keeps your full scan history, and adds run comparison and "
-                "report export.\n\nThis demo build does not take payment, so the upgrade "
-                "is applied immediately.\n\nContinue?",
-            )
-            if confirm != QMessageBox.Yes:
-                return
-            try:
-                account = self.api.upgrade()
-            except Exception as exc:  # noqa: BLE001
-                QMessageBox.warning(self, "Upgrade failed", str(exc))
-                return
-            self._refresh_account_ui()
-            QMessageBox.information(
-                self, "Upgraded", f"Your account is now {account.tier}."
-            )
-
         def _open_account_settings(self) -> None:
             """Display name, email, password, and account deletion."""
             if self.api is None:
@@ -634,20 +745,11 @@ def run(cfg: Config | None = None) -> int:
             if result.signed_out:
                 self._force_sign_out(result.message)
 
-        def _cancel_subscription(self) -> None:
-            if self.api is None:
-                return
-            from .account_dialogs import confirm_cancel_subscription
-
-            result = confirm_cancel_subscription(self, self.api)
-            if result.signed_out:
-                self._force_sign_out(result.message)
-
         def _force_sign_out(self, message: str = "") -> None:
             """Drop the session locally after the server has already ended it.
 
             Used when an action revokes the session as a side effect, such as changing a
-            password or a tier. Calling logout() would only fail against a token the server
+            password or joining a team. Calling logout() would only fail against a token the server
             has already rejected.
             """
             from .signin import clear_session
@@ -663,16 +765,16 @@ def run(cfg: Config | None = None) -> int:
                 return
             try:
                 account = self.api.get_profile()
-                subscription = self.api.get_subscription()
+                # The history listing is where the server reports the account's limit.
+                limit = self.api.list_history(limit=1).get("historyLimit")
             except Exception as exc:  # noqa: BLE001
                 QMessageBox.warning(self, "Could not load account", str(exc))
                 return
 
-            limit = subscription["limits"]["historyLimit"]
             lines = [
                 f"<b>Email:</b> {account.email}",
                 f"<b>Name:</b> {account.display_name or 'not set'}",
-                f"<b>Plan:</b> {account.tier}",
+                f"<b>Account type:</b> {'team' if account.is_team else 'student'}",
                 f"<b>Role:</b> {account.role}",
                 f"<b>Student email:</b> {_student_status_text(account)}",
                 f"<b>Scans saved:</b> {account.scan_count}",
@@ -775,49 +877,40 @@ def run(cfg: Config | None = None) -> int:
             """
             w = QWidget()
             layout = QVBoxLayout(w)
-            layout.setContentsMargins(24, 24, 24, 16)
-            layout.setSpacing(18)
+            layout.setContentsMargins(16, 8, 16, 16)
+            layout.setSpacing(12)
 
-            hero = QVBoxLayout()
-            hero.setSpacing(6)
-            hero_title = QLabel("BioAudit")
-            hero_title.setObjectName("heroTitle")
-            hero_subtitle = QLabel(
-                "Android biometric authentication security testing")
-            hero_subtitle.setObjectName("heroSubtitle")
-            hero_bar = QFrame()
-            hero_bar.setObjectName("heroBar")
-            hero.addWidget(hero_title)
-            hero.addWidget(hero_subtitle)
-            hero.addSpacing(4)
-            hero.addWidget(hero_bar)
-            layout.addLayout(hero)
+            # The page header already names the app's purpose, so Home opens straight
+            # onto the choices instead of repeating a title banner.
+            choose = QLabel("Choose what to do")
+            choose.setObjectName("sectionHeading")
+            layout.addWidget(choose)
 
             grid = QGridLayout()
-            grid.setSpacing(18)
+            grid.setSpacing(14)
             grid.setColumnStretch(0, 1)
             grid.setColumnStretch(1, 1)
 
             self.home_scan_tile = _tile_button(
-                "scan", "\U0001F50D", "Scan an APK",
+                "scan", "scan", "Scan an APK",
                 "Static analysis of an .apk file on disk. No device needed.")
             self.home_scan_tile.clicked.connect(
                 lambda: self.tabs.setCurrentIndex(self._scan_tab_index))
 
             self.home_assess_tile = _tile_button(
-                "assess", "\U0001F4F1", "Assess a device",
+                "assess", "assess", "Assess a device",
                 "Full runtime assessment against an installed app, over ADB.")
             self.home_assess_tile.clicked.connect(
                 lambda: self.tabs.setCurrentIndex(self._assess_tab_index))
 
             self.home_history_tile = _tile_button(
-                "history", "\U0001F553", "History",
+                "history", "history", "History",
                 "Browse past runs saved to your account, and compare two of them.")
             self.home_history_tile.clicked.connect(
-                lambda: self.tabs.setCurrentIndex(self._assess_tab_index + 1))
+                lambda: self.tabs.setCurrentIndex(self._history_tab_index))
 
             self.home_team_tile = _tile_button(
-                "team", "\U0001F465", "Team",
+                "team", "team", "Team",
                 "Admin oversight: members, invitations, flagged runs, activity.")
             self.home_team_tile.clicked.connect(
                 lambda: self.tabs.setCurrentIndex(self._assess_tab_index + 2))
@@ -826,7 +919,46 @@ def run(cfg: Config | None = None) -> int:
             grid.addWidget(self.home_assess_tile, 0, 1)
             grid.addWidget(self.home_history_tile, 1, 0)
             grid.addWidget(self.home_team_tile, 1, 1)
+            self.home_grid = grid   # the Team tile moves within it for an admin
             layout.addLayout(grid)
+
+            # What happens during a test, so a first-time user knows what they are
+            # starting before they start it.
+            layout.addSpacing(14)
+            how = QLabel("How a test works")
+            how.setObjectName("sectionHeading")
+            layout.addWidget(how)
+            steps = QHBoxLayout()
+            steps.setSpacing(14)
+            for number, title, body in (
+                ("01", "Read the app file",
+                 "Checks the manifest and code for biometric checks that trust a "
+                 "simple yes or no."),
+                ("02", "Probe a real phone",
+                 "Opens protected screens directly over ADB, with no root and no "
+                 "changes to the app."),
+                ("03", "Explain the fix",
+                 "Each confirmed finding comes with guidance checked against "
+                 "OWASP MASVS."),
+            ):
+                card = QFrame()
+                card.setObjectName("stepCard")
+                inner = QVBoxLayout(card)
+                inner.setContentsMargins(16, 14, 16, 14)
+                inner.setSpacing(4)
+                num = QLabel(number)
+                num.setObjectName("stepNumber")
+                head = QLabel(title)
+                head.setObjectName("stepTitle")
+                text = QLabel(body)
+                text.setObjectName("stepBody")
+                text.setWordWrap(True)
+                inner.addWidget(num)
+                inner.addWidget(head)
+                inner.addWidget(text)
+                inner.addStretch(1)
+                steps.addWidget(card, 1)
+            layout.addLayout(steps)
             layout.addStretch(1)
             return w
 
@@ -891,7 +1023,7 @@ def run(cfg: Config | None = None) -> int:
             self.scan_save_report_btn = QPushButton("Save report from account")
             self.scan_save_report_btn.setEnabled(False)
             self.scan_save_report_btn.setToolTip(
-                "Download this run's report from your account. Part of the premium plan.")
+                "Download this run's report from your account. For team accounts.")
             self.scan_save_report_btn.clicked.connect(self._save_server_report)
             # Only shown while a run is going, so the row is not cluttered when idle.
             self.scan_cancel_btn = QPushButton("Cancel")
@@ -1088,7 +1220,7 @@ def run(cfg: Config | None = None) -> int:
             self.assess_save_report_btn = QPushButton("Save report from account")
             self.assess_save_report_btn.setEnabled(False)
             self.assess_save_report_btn.setToolTip(
-                "Download this run's report from your account. Part of the premium plan.")
+                "Download this run's report from your account. For team accounts.")
             self.assess_save_report_btn.clicked.connect(self._save_server_report)
             # Only shown while a run is going, so the row is not cluttered when idle.
             self.assess_cancel_btn = QPushButton("Cancel")
@@ -1321,16 +1453,11 @@ def run(cfg: Config | None = None) -> int:
                     data = self.api.list_history(limit=100)
                     limit = data.get("historyLimit")
                     for scan in data.get("scans", []):
-                        counts = scan.get("counts") or {}
-                        sev = " ".join(
-                            f"{name[0].upper()}{counts.get(name, 0)}"
-                            for name in ("critical", "high", "medium", "low", "info")
-                            if counts.get(name)
-                        ) or "no findings"
+                        sev = severity_summary(scan.get("counts") or {})
                         target = scan.get("target") or {}
                         label = target.get("packageName") or target.get("apkFileName") or "unknown"
-                        when = str(scan.get("createdAt", ""))[:19]
-                        self.history_combo.addItem(f"{when}  {label} — {sev}")
+                        when = format_when(scan.get("createdAt"))
+                        self.history_combo.addItem(f"{when}  ·  {label}  ·  {sev}")
                         self._history_ids.append(scan["id"])
                 except Exception as exc:  # noqa: BLE001
                     # Deliberately not the status bar: this can run right after a job
@@ -1350,7 +1477,7 @@ def run(cfg: Config | None = None) -> int:
                 lines = ["Run a scan or an assessment first.",
                          "Every finished run is saved to your account automatically."]
                 if limit is not None:
-                    lines.append(f"Your plan keeps the newest {limit} runs.")
+                    lines.append(f"A student account keeps the newest {limit} runs.")
                 self.history_results.setHtml(
                     theme.empty_state_html("No runs yet", lines, self.palette_colours))
 
@@ -1416,7 +1543,7 @@ def run(cfg: Config | None = None) -> int:
             self._reload_history()
 
         def _compare_runs(self) -> None:
-            """Premium. Compare two runs saved to the account.
+            """Team accounts. Compare two runs saved to the account.
 
             Uses the server's copies rather than the local database, because the comparison
             itself is a server feature and matching is done there by category and component.
@@ -1445,7 +1572,7 @@ def run(cfg: Config | None = None) -> int:
             def describe(scan: dict) -> str:
                 target = scan.get("target") or {}
                 label = target.get("packageName") or target.get("apkFileName") or "unknown"
-                return f"{str(scan.get('createdAt', ''))[:19]}  {label}"
+                return f"{format_when(scan.get('createdAt'))}  ·  {label}"
 
             labels = [describe(s) for s in scans]
 
@@ -1739,7 +1866,7 @@ def run(cfg: Config | None = None) -> int:
             moment the run finished, before any explanation exists — so once the server
             has them, they are copied back into that same run and both views are
             refreshed. Without this, the explanations would only ever be visible through
-            the server-backed "Save report from account" (premium-only) option.
+            the server-backed "Save report from account" (team-only) option.
             """
             checkbox = (ctx or {}).get("use_ai_checkbox")
             if checkbox is None or not checkbox.isChecked():
@@ -1833,26 +1960,27 @@ def run(cfg: Config | None = None) -> int:
             self._explain_thread = None
             self._explain_worker = None
 
-        def _prompt_premium_upgrade(self) -> bool:
-            """Offer to upgrade on the spot. Returns True if the caller should proceed.
+        def _team_only(self) -> bool:
+            """True on a team account; otherwise explain why not and return False.
 
-            Used by the save-report handlers, which stay clickable on a free account
+            Used by the save-report handlers, which stay clickable on a student account
             (see _update_save_report_buttons) rather than just disabled, so the reason
-            and the fix are in the same dialog instead of a tooltip someone has to find.
-            _upgrade() has its own Yes/No confirmation, so this does not ask twice.
+            and the way to get it are in the same dialog instead of a tooltip.
             """
+            if self.api and self.api.account and self.api.account.is_team:
+                return True
             QMessageBox.information(
-                self, "Premium feature",
-                "Saving a report from your account is part of the premium plan.")
-            self._upgrade()
-            return bool(self.api and self.api.account and self.api.account.is_premium)
+                self, "Team accounts only",
+                "Saving a report from your account is for team accounts.\n\n"
+                "To join a team, ask its admin for an invitation, then use "
+                "Account → Join an organisation…")
+            return False
 
         def _save_server_report(self) -> None:
-            """Premium. Download the report the server holds for the last saved run."""
+            """Team accounts. Download the report the server holds for the last saved run."""
             if self.api is None or not self._last_scan_id:
                 return
-            premium = bool(self.api.account and self.api.account.is_premium)
-            if not premium and not self._prompt_premium_upgrade():
+            if not self._team_only():
                 return
             path, _ = QFileDialog.getSaveFileName(
                 self, "Save report", f"bioaudit-{self._last_scan_id}.html",
@@ -1875,7 +2003,7 @@ def run(cfg: Config | None = None) -> int:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(path)))
 
         def _save_history_report(self) -> None:
-            """Premium. Download the report for whichever run is selected in History.
+            """Team accounts. Download the report for whichever run is selected in History.
 
             Separate from _save_server_report because that one is scoped to the run just
             finished this session (self._last_scan_id); this one saves an older run picked
@@ -1884,8 +2012,7 @@ def run(cfg: Config | None = None) -> int:
             index = self.history_combo.currentIndex()
             if self.api is None or not (0 <= index < len(self._history_ids)):
                 return
-            premium = bool(self.api.account and self.api.account.is_premium)
-            if not premium and not self._prompt_premium_upgrade():
+            if not self._team_only():
                 return
             scan_id = self._history_ids[index]
             path, _ = QFileDialog.getSaveFileName(
@@ -1912,7 +2039,7 @@ def run(cfg: Config | None = None) -> int:
             """Open the selected History run as a full (light) report in the browser.
 
             Rendered from the server copy into a temp file; unlike _save_history_report
-            this is not premium-gated and does not ask where to save.
+            this is not team-gated and does not ask where to save.
             """
             index = self.history_combo.currentIndex()
             if self.api is None or not (0 <= index < len(self._history_ids)):
@@ -1961,7 +2088,7 @@ def _student_status_text(account) -> str:
         university = (sv.get("university") or {}).get("name")
         return f"verified ({university})" if university else "verified"
     if not sv.get("eligible"):
-        return "not a university address (the free plan is for students)"
+        return "not a university address (personal accounts are for students)"
     return "not yet verified (Account menu, Verify student email)"
 
 
@@ -2001,9 +2128,9 @@ def _comparison_html(comparison: dict, palette: dict) -> str:
     <div style="font-family:'Segoe UI',Arial,sans-serif;padding:14px 18px">
       <h2 style="color:{palette['text']};font-size:14pt;margin:0 0 4px 0">Run comparison</h2>
       <p style="color:{palette['muted']};margin:0 0 14px 0">
-        Baseline {_escape(str(comparison['baseline'].get('createdAt', ''))[:19])}
+        Baseline {_escape(format_when(comparison['baseline'].get('createdAt')))}
         &nbsp;→&nbsp;
-        Current {_escape(str(comparison['current'].get('createdAt', ''))[:19])}
+        Current {_escape(format_when(comparison['current'].get('createdAt')))}
       </p>
       <p style="margin-bottom:16px">
         <span style="background:#188038;color:#fff;padding:2px 9px;border-radius:10px;

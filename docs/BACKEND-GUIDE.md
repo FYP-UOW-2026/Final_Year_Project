@@ -71,7 +71,7 @@ backend/src/
     firebase.js       Admin SDK init and credential resolution
   constants/index.js  collection names, tiers, roles, statuses, severities
   middleware/
-    auth.js           requireAuth, loadProfile, requirePremium, requireAdmin, ...
+    auth.js           requireAuth, loadProfile, requireTeam, requireAdmin, ...
     validate.js       zod request validation
     errorHandler.js   one response shape for every failure
   routes/             HTTP layer: paths, validation, permissions
@@ -135,7 +135,7 @@ dropped. Skipping it means writing half-formed documents to Firestore and discov
 much later.
 
 **`ApiError`** for anything expected: `ApiError.notFound(...)`, `.forbidden(...)`,
-`.conflict(...)`, `.badRequest(msg, details)`, `.paymentRequired(...)`. The error handler
+`.conflict(...)`, `.badRequest(msg, details)`. The error handler
 turns these into the right status and passes your message through. Anything else becomes a
 generic 500 with the detail logged but **not** returned, because internal messages tend to
 quote database paths and configuration.
@@ -146,7 +146,7 @@ quote database paths and configuration.
 |---|---|---|
 | `requireAuth` | `req.user` (uid, tier, role, organisationId from token claims) | any authenticated route |
 | `loadProfile` | `req.profile` (the live Firestore user document) | you need current data, not a possibly-stale token claim |
-| `requirePremium` | — | premium-only features |
+| `requireTeam` | — | team-only features (an account in an organisation) |
 | `requireAdmin` | — | admin-only |
 | `denyAdmin` | — | the reverse: features an admin must *not* have, i.e. running scans |
 | `requireOwnOrganisation` | — | the `:orgId` in the path must be the caller's own org |
@@ -388,13 +388,13 @@ file has one entry per detector category, and the detection engine emits a close
 just falls back to an ungrounded (plainer) explanation. Revise the guidance there as MASVS
 evolves without touching the code that calls the model.
 
-**Free-tier cap.** `FREE_AI_MONTHLY_LIMIT` (default 20) is the number of explanations a
-free account may generate per calendar month; premium is uncapped. The counter lives on the
+**Student cap.** `FREE_AI_MONTHLY_LIMIT` (default 20) is the number of explanations a
+student account may generate per calendar month; team accounts are uncapped. The counter lives on the
 user document as `aiUsage: { month, count }` and is spent inside a transaction, so two
 simultaneous requests cannot both take the last one. A counter from an earlier month reads
 as zero rather than needing a scheduled reset. A failed Groq call is refunded — the API
-fails often enough (rate limits, quota) that charging for nothing would quietly eat a free
-user's month. Note this counter is BioAudit's own limit and independent of Groq's own
+fails often enough (rate limits, quota) that charging for nothing would quietly eat a
+student's month. Note this counter is BioAudit's own limit and independent of Groq's own
 account-level quota — a user can exhaust either one first.
 
 ### Email

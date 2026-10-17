@@ -3,7 +3,7 @@
  *
  * The scanning itself happens in the desktop app, because the APK file and the
  * USB-connected phone are both on the user's own machine. This service stores what the
- * app found, serves it back as history, and enforces the free tier's retention limit.
+ * app found, serves it back as history, and enforces a student account's retention limit.
  */
 import { db, FieldValue } from "../config/firebase.js";
 import { COLLECTIONS, SEVERITIES, TIERS } from "../constants/index.js";
@@ -27,13 +27,13 @@ function countBySeverity(findings) {
 }
 
 /**
- * Trim a free account back to its retention limit, oldest first.
+ * Trim a student account back to its retention limit, oldest first.
  *
  * Doing this on save rather than on read means the stored data always matches what the
- * user can see, so an upgrade does not suddenly reveal scans they thought were gone.
+ * user can see, so joining a team does not suddenly reveal scans they thought were gone.
  */
 async function enforceRetention(userId, tier) {
-  if (tier === TIERS.PREMIUM) return { removed: 0 };
+  if (tier === TIERS.TEAM) return { removed: 0 };
 
   const limit = env.limits.freeHistory;
   const snap = await scans().where("userId", "==", userId).orderBy("createdAt", "desc").get();
@@ -163,31 +163,21 @@ export async function getScan(scanId) {
  * their organisation, which is what the Admin "View member data" function needs, and
  * that read is written to the audit log by the route that calls it.
  *
- * "A member" means a current one. A scan keeps the organisationId it was saved under, so
- * without the membership check an admin could go on reading a person's history after
- * removing them, or after they left.
+ * Membership is checked against the organisation as it is now, not the organisationId
+ * stamped on the scan: a scan saved before its owner joined carries no organisation,
+ * yet it is listed by "View member data", so the admin must be able to open it. By the
+ * same rule, once a member is removed their scans are no longer the admin's to read.
  */
 export async function getScanForCaller(scanId, user) {
   const scan = await getScan(scanId);
 
   if (scan.userId === user.uid) return scan;
 
-  const isAdminOfSameOrg =
-    user.role === "admin" &&
-    user.organisationId &&
-    scan.organisationId === user.organisationId &&
-    (await isCurrentMember(user.organisationId, scan.userId));
-
-  if (!isAdminOfSameOrg) {
-    throw ApiError.forbidden("You do not have access to that scan.");
+  if (user.role === "admin" && user.organisationId) {
+    const org = await db.collection(COLLECTIONS.ORGANISATIONS).doc(user.organisationId).get();
+    if (org.exists && (org.data().memberIds ?? []).includes(scan.userId)) return scan;
   }
-  return scan;
-}
-
-/** Whether a user is in an organisation's member list right now. */
-export async function isCurrentMember(organisationId, uid) {
-  const snap = await db.collection(COLLECTIONS.ORGANISATIONS).doc(organisationId).get();
-  return snap.exists && (snap.data().memberIds ?? []).includes(uid);
+  throw ApiError.forbidden("You do not have access to that scan.");
 }
 
 /** Persist an AI explanation onto the finding it belongs to. */
@@ -259,7 +249,7 @@ export async function deleteAllScans(userId) {
 }
 
 /**
- * Compare two scans of the same app. Premium only.
+ * Compare two scans of the same app. Team accounts only.
  *
  * Grouping by category and component rather than by the finding's id is what makes this
  * useful: the desktop app generates a fresh id per run, so matching on id would report

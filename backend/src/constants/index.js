@@ -11,13 +11,25 @@ export const COLLECTIONS = {
   STUDENT_VERIFICATIONS: "studentVerifications",
 };
 
-/** Billing tier. Controls which features a signed-in user may reach. */
+/**
+ * Which features a signed-in user may reach. There is no paid plan: an account on a
+ * team (admin or member) has everything, and a personal student account keeps the
+ * limited history, no compare or export, and a monthly cap on AI explanations.
+ */
 export const TIERS = {
-  FREE: "free",
-  PREMIUM: "premium",
+  STUDENT: "student",
+  TEAM: "team",
 };
 
-/** Role within an organisation. Separate from tier: an admin can be on either tier. */
+/**
+ * An account's tier, derived from team membership rather than stored, so joining or
+ * leaving a team changes it with nothing else to keep in step.
+ */
+export function tierFor({ organisationId } = {}) {
+  return organisationId ? TIERS.TEAM : TIERS.STUDENT;
+}
+
+/** Role within an organisation. */
 export const ROLES = {
   MEMBER: "member",
   ADMIN: "admin",
@@ -46,13 +58,6 @@ export const FLAG_STATUS = {
   OPEN: "open",
   REVIEWED: "reviewed",
   DISMISSED: "dismissed",
-};
-
-export const SUBSCRIPTION_STATUS = {
-  NONE: "none",
-  ACTIVE: "active",
-  CANCELLING: "cancelling",
-  CANCELLED: "cancelled",
 };
 
 /** Ordered so a report can sort most serious first. */

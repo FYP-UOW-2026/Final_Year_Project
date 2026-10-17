@@ -158,7 +158,7 @@ twice costs nothing.
 ### Reports
 
 Every run writes a report automatically — a PDF if it can, HTML otherwise. **Open full
-report** opens it. On a premium plan, **Save report from account** downloads the server's
+report** opens it. On a team account, **Save report from account** downloads the server's
 copy, which is handy for sharing.
 
 Where it lands depends on how you started BioAudit:
@@ -181,13 +181,24 @@ from other computers, since the account is the only place they live.
 - Pick a run from the dropdown to see its full findings again
 - **Reload** re-fetches from the server
 - **Delete this run** / **Clear all history** remove them permanently from your account
-- **Compare two runs…** (premium) shows what got fixed, what is new, and what is
+- **Compare two runs…** (team accounts) shows what got fixed, what is new, and what is
   unchanged between two runs of the same app. Findings are matched by category and
   component, so a genuine fix shows as resolved even though each run generates fresh IDs.
 
-**Free plan** keeps your 10 most recent runs and drops the oldest as you add more; the app
-tells you when that happens. **Premium** keeps everything and adds run comparison and
-server report export.
+There are two kinds of account, and no paid plan:
+
+| | Student account | Team account (member or admin) |
+|---|---|---|
+| Who | A personal account at a verified university email | Anyone who joined a team, or created one |
+| History kept | Your 10 most recent runs | Everything |
+| Compare runs, save report from account | No | Yes |
+| AI explanations | A monthly allowance | Unlimited |
+
+A student account drops its oldest run as you add more; the app tells you when that
+happens. If you are removed from a team, your account becomes a student account again.
+
+Admin accounts oversee a team rather than running scans, so they do not see the Scan,
+Assess or History pages.
 
 ---
 
@@ -207,14 +218,13 @@ As an admin you can:
 
 ### What an admin can and cannot see
 
-An admin sees **that** a member ran a scan, against which app, and **how many** problems
-of each severity it found. An admin does **not** see the findings themselves — the actual
-evidence pulled out of the member's app is never sent to them.
+**Members → View their runs** lists **that** a member ran a scan, against which app, and
+**how many** problems of each severity it found. To read a run's findings, the admin opens
+it on purpose with **Open a run…**; findings are read-only there.
 
-That line exists because the two needs are different. Oversight ("is my team testing
-things they are authorised to test?") only needs to know a scan happened. Reading the
-evidence would mean handing over potentially sensitive detail about someone else's app.
-Every time an admin views a member's scan list, that read is written to the activity log.
+Both reads, the list and each run opened, are written to the activity log, so looking at a
+member's work always leaves a trace. An admin can only read the runs of people who are
+currently on the team: once someone is removed, their runs are theirs alone again.
 
 ---
 
@@ -222,21 +232,16 @@ Every time an admin views a member's scan list, that read is written to the acti
 
 Everything is under the **Account** menu.
 
-- **Account details…** — who you are, your plan, your team
+- **Account details…** — who you are, your account type, your team
 - **Account settings…** — change your display name, email address, or password, or delete
   your account
 - **Join an organisation…** — redeem an invite token (only shown if you are not already
   in a team)
-- **Upgrade to premium…** / **Cancel subscription…**
 - **Sign out**
 
 **Changing your password or email signs you out everywhere**, on purpose — if someone
 else had your session, that ends it. Same for joining a team: your permissions change, so
 the app signs you in again to pick them up.
-
-**This build does not take payment.** "Upgrade to premium" flips your plan immediately so
-the premium features can be demonstrated. Wiring in a real payment provider is outside
-this project's scope.
 
 ---
 

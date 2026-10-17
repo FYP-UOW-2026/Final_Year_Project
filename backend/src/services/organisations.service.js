@@ -61,7 +61,6 @@ export async function listMembers(orgId) {
         id: doc.id,
         email: data.email,
         displayName: data.displayName,
-        tier: data.tier,
         role: data.role,
         disabled: data.disabled ?? false,
         scanCount: data.scanCount ?? 0,
@@ -190,12 +189,10 @@ export async function acceptInvitation({ token, uid }) {
       organisationId: invitation.organisationId,
       organisationName: orgSnap.data().name,
       role: invitation.role,
-      tier: userSnap.data().tier,
     };
   });
 
   await setClaims(uid, {
-    tier: result.tier,
     role: result.role,
     organisationId: result.organisationId,
   });
@@ -216,9 +213,6 @@ export async function removeMember({ orgId, uid, actorId }) {
     throw ApiError.forbidden("The organisation owner cannot be removed.");
   }
 
-  const userSnap = await users().doc(uid).get();
-  const tier = userSnap.exists ? userSnap.data().tier : "free";
-
   await db.runTransaction(async (tx) => {
     tx.update(orgs().doc(orgId), {
       memberIds: FieldValue.arrayRemove(uid),
@@ -231,7 +225,7 @@ export async function removeMember({ orgId, uid, actorId }) {
     });
   });
 
-  await setClaims(uid, { tier, role: ROLES.MEMBER, organisationId: null });
+  await setClaims(uid, { role: ROLES.MEMBER, organisationId: null });
 }
 
 /** Promote an existing member to admin. */
@@ -253,7 +247,6 @@ export async function addAdmin({ orgId, uid }) {
   });
 
   await setClaims(uid, {
-    tier: userSnap.data().tier,
     role: ROLES.ADMIN,
     organisationId: orgId,
   });
@@ -269,11 +262,11 @@ export async function flagScan({ orgId, scanId, reason, flaggedBy }) {
   const scanSnap = await scanRef.get();
   if (!scanSnap.exists) throw ApiError.notFound("That scan does not exist.");
 
+  // Judged by current membership, not the organisationId stamped on the scan, so a run a
+  // member saved before joining can be flagged like any other (see getScanForCaller).
   const scan = scanSnap.data();
-  // The owner must still be a member: a scan keeps the organisationId it was saved under
-  // after its owner is removed or leaves, and those scans are no longer the admin's.
   const org = await getOrganisation(orgId);
-  if (scan.organisationId !== orgId || !org.memberIds.includes(scan.userId)) {
+  if (!org.memberIds.includes(scan.userId)) {
     throw ApiError.forbidden("That scan does not belong to your organisation.");
   }
 

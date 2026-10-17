@@ -6,7 +6,7 @@ Commands:
   register --email E --password P         create an account (add --organisation to admin
                                            a team, or --join-token to join one from an invite)
   whoami                                  show who is currently signed in
-  verify-student [--code C] [--resend]    confirm a university email for the free plan
+  verify-student [--code C] [--resend]    confirm a university email for a student account
   scan-apk <apk>                          static analysis only (no device)
   assess  --package P --i-am-authorized   full black-box assessment on a device
   explain <scan-id>                       ask the server to explain a saved run's findings
@@ -117,7 +117,7 @@ def cmd_register(args, cfg: Config) -> int:
             print(f"A six-digit code has been emailed to {client.account.email}. "
                   "Enter it with `bioaudit verify-student` to unlock scanning.")
         else:
-            print("The free plan needs a verified university email before you can scan. "
+            print("A student account needs a verified university email before you can scan. "
                   "Run `bioaudit verify-student`.")
     return 0
 
@@ -159,9 +159,9 @@ def cmd_verify_student(args, cfg: Config) -> int:
     if not sv.get("eligible"):
         university = (sv.get("university") or {}).get("name")
         print(f"{account.email} is not {'a ' + university if university else 'a university'} "
-              "email address, so no code can be sent to it. The free plan is for students: "
-              "change your account email to your university address in the app, or upgrade "
-              "to premium.", file=sys.stderr)
+              "email address, so no code can be sent to it. Personal accounts are for "
+              "students: change your account email to your university address in the app, "
+              "or join a team with an invitation from its admin.", file=sys.stderr)
         return 1
 
     try:
@@ -198,8 +198,9 @@ def cmd_assess(args, cfg: Config) -> int:
         return 2
 
     if not args.apk:
-        print("Note: no --apk supplied; IPC oracle needs the exported-component list. "
-              "Provide --apk for the headline check.", file=sys.stderr)
+        print("Note: no --apk supplied; will pull the installed app off the device "
+              "to read its components. Pass --apk to skip the pull or test offline.",
+              file=sys.stderr)
 
     try:
         run = core.build_assess(args.package, args.apk, cfg)
@@ -340,14 +341,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="do not save the session to disk (sign in for this command only)")
     r.add_argument("--university", metavar="ID",
                    help="your university's id from GET /api/universities; the email "
-                        "must be one it issues (students on the free plan)")
+                        "must be one it issues (student accounts)")
     r.set_defaults(func=cmd_register)
 
     w = sub.add_parser("whoami", help="show who is currently signed in")
     w.set_defaults(func=cmd_whoami)
 
     v = sub.add_parser("verify-student",
-                       help="confirm your university email to unlock the free plan")
+                       help="confirm your university email to unlock scanning")
     v.add_argument("--code", help="the six-digit code from the email (prompted if omitted)")
     v.add_argument("--resend", action="store_true", help="email a new code first")
     v.set_defaults(func=cmd_verify_student)
