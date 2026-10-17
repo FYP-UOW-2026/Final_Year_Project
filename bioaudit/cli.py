@@ -130,7 +130,7 @@ def cmd_register(args, cfg: Config) -> int:
     try:
         if args.organisation:
             client.register_admin(args.email, password, args.organisation, args.name,
-                                  tos_accepted=True)
+                                  tos_accepted=True, solo=args.solo)
         else:
             client.register(args.email, password, args.name,
                             university_id=args.university, tos_accepted=True)
@@ -380,6 +380,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--password", help="omit to be prompted (not echoed)")
     r.add_argument("--name", help="display name")
     r.add_argument("--organisation", help="create a team and make this account its admin")
+    r.add_argument("--solo", action="store_true",
+                   help="with --organisation: one-person team for freelancers, "
+                        "so the owner can run scans")
     r.add_argument("--join-token", help="redeem a team invite instead of creating one")
     r.add_argument("--server", help="override the configured API server")
     r.add_argument("--no-remember", action="store_true",

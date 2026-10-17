@@ -528,6 +528,39 @@ await check("the same invitation token cannot be used twice", async () => {
   assert.equal(status, 409, "a redeemed invitation should be refused");
 });
 
+await check("a solo organisation's owner can scan until a second person joins", async () => {
+  const soloEmail = `solo-${unique()}@example.com`;
+  const reg = await call("POST", "/auth/register-admin", {
+    body: { email: soloEmail, password: "solo-password-1", organisationName: "One Person Ltd", solo: true },
+  });
+  assert.equal(reg.status, 201, JSON.stringify(reg.body));
+  const soloToken = reg.body.session.idToken;
+  const soloOrg = reg.body.organisation.id;
+
+  const first = await call("POST", "/scans", { token: soloToken, body: minimalScan });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+
+  const inv = await call("POST", `/organisations/${soloOrg}/invitations`, {
+    token: soloToken,
+    body: { email: `partner-${unique()}@example.com` },
+  });
+  assert.equal(inv.status, 201, JSON.stringify(inv.body));
+  const partner = await call("POST", "/auth/register", {
+    body: { email: `partner2-${unique()}@example.com`, password: "partner-password-1" },
+  });
+  const joined = await call("POST", "/organisations/join", {
+    token: partner.body.session.idToken,
+    body: { token: inv.body.token },
+  });
+  assert.equal(joined.status, 200, JSON.stringify(joined.body));
+
+  const relogin = await call("POST", "/auth/login", {
+    body: { email: soloEmail, password: "solo-password-1" },
+  });
+  const after = await call("POST", "/scans", { token: relogin.body.session.idToken, body: minimalScan });
+  assert.equal(after.status, 403, "owner must stop scanning once the team has a second member");
+});
+
 await check("an admin can list the members of their own organisation", async () => {
   const { status, body } = await call("GET", `/organisations/${orgId}/members`, {
     token: adminToken,

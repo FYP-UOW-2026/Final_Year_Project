@@ -168,12 +168,14 @@ def make_register_form(base_url: str):
             self.team_email.setPlaceholderText("you@company.com")
             self.team_password = password_field("At least 8 characters")
             self.team_confirm = password_field()
+            self.team_solo = QCheckBox("I work alone (freelancer or consultant)")
 
             form.addRow("Organisation:", self.team_org)
             form.addRow("Name:", self.team_name)
             form.addRow("Work email:", self.team_email)
             form.addRow("Password:", self.team_password)
             form.addRow("Confirm:", self.team_confirm)
+            form.addRow("", self.team_solo)
             form.addRow("", hint(
                 "Creates a team and makes you its admin, so you can invite colleagues "
                 "and oversee their assessments. Joining someone else's team? Use the "
@@ -226,7 +228,8 @@ def make_register_form(base_url: str):
                     return problem
                 client.register_admin(email, password, org,
                                       self.team_name.text().strip() or None,
-                                      tos_accepted=True)
+                                      tos_accepted=True,
+                                      solo=self.team_solo.isChecked())
                 return None
 
             found, uni = self._selected_university()

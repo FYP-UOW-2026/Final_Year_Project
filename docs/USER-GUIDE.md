@@ -200,6 +200,10 @@ happens. If you are removed from a team, your account becomes a student account 
 Admin accounts oversee a team rather than running scans, so they do not see the Scan,
 Assess or History pages.
 
+**Working alone?** Tick *I work alone* (CLI: `--organisation "Name" --solo`) when creating a team.
+A one-person team lets you scan as its owner. Once a second person joins, the owner goes back
+to overseeing only.
+
 ---
 
 ## 7. Teams
