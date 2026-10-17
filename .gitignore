@@ -31,3 +31,9 @@ node_modules/
 BioAudit-Backend-QA.docx
 sample-vuln-app.apk.zip
 thesis_screenshots/
+
+# Reflection notes
+reflection_note/
+
+# Test case workbook
+BioAudit_Test_Cases_*.xlsx
