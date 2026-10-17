@@ -309,7 +309,7 @@ def _finish(run: TestRun, cfg: Config, client: ApiClient, *, authorised: bool,
 
 def _print_findings(run: TestRun) -> None:
     for f in run.ranked():
-        print(f"  [{f.severity.label:8}] {f.title}  ({', '.join(f.owasp)})")
+        print(f"  [{f.severity.label:8}] {f.title}  ({', '.join(f.owasp + f.masvs)})")
 
 
 def build_parser() -> argparse.ArgumentParser:

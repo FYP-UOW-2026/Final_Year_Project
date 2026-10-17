@@ -939,7 +939,7 @@ def run(cfg: Config | None = None) -> int:
                  "changes to the app."),
                 ("03", "Explain the fix",
                  "Each confirmed finding comes with guidance checked against "
-                 "OWASP MASVS."),
+                 "OWASP Mobile Top 10 and MASVS."),
             ):
                 card = QFrame()
                 card.setObjectName("stepCard")
