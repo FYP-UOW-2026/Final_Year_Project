@@ -108,6 +108,8 @@ router.post(
       tosAccepted: tosSchema,
       displayName: z.string().trim().min(1).max(80).optional(),
       organisationName: z.string().trim().min(2, "Give your organisation a name.").max(120),
+      // A freelancer's one-person team: its owner may also run scans (see denyAdmin).
+      solo: z.boolean().optional(),
     }),
   }),
   asyncHandler(async (req, res) => {
@@ -122,6 +124,7 @@ router.post(
     const organisation = await organisations.createOrganisation({
       name: req.body.organisationName,
       ownerId: profile.uid,
+      solo: req.body.solo,
     });
 
     // The organisation id only exists once the organisation has been created, so the

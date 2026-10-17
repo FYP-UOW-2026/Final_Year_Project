@@ -313,6 +313,21 @@ def test_admin_cannot_see_member_findings(client: ApiClient):
     assert scans[0]["counts"], "but the severity counts should be visible"
 
 
+def test_solo_owner_can_upload_their_own_scan(client: ApiClient):
+    client.register_admin(f"pytest-solo-{_unique()}@example.com", "pytest-password-1",
+                          "Pytest Solo", tos_accepted=True, solo=True)
+    result = client.upload_run(_sample_run(), authorised=True)
+    assert result["scan"]["findingCount"] == 2
+
+
+def test_team_admin_without_solo_cannot_upload(client: ApiClient):
+    client.register_admin(f"pytest-nosolo-{_unique()}@example.com", "pytest-password-1",
+                          "Pytest Team Two", tos_accepted=True)
+    with pytest.raises(ApiClientError) as exc:
+        client.upload_run(_sample_run(), authorised=True)
+    assert exc.value.status == 403
+
+
 def test_register_requires_terms(client: ApiClient):
     with pytest.raises(ApiClientError) as exc:
         client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1",

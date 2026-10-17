@@ -267,11 +267,18 @@ class ApiClient:
 
     def register_admin(self, email: str, password: str, organisation_name: str,
                        display_name: Optional[str] = None,
-                       tos_accepted: bool = False) -> tuple[Account, dict]:
-        """Create an admin account together with the organisation it administers."""
+                       tos_accepted: bool = False,
+                       solo: bool = False) -> tuple[Account, dict]:
+        """Create an admin account together with the organisation it administers.
+
+        solo=True marks a one-person team (freelancer): while the owner is its only
+        member they may run scans themselves.
+        """
         payload = {"email": email, "password": password,
                    "organisationName": organisation_name,
                    "tosAccepted": bool(tos_accepted)}
+        if solo:
+            payload["solo"] = True
         if display_name:
             payload["displayName"] = display_name
 
