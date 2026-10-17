@@ -35,7 +35,11 @@ from .adb import AdbError
 from .api import ApiClient, ApiClientError
 from .config import Config
 from .models import TestRun
+from .report import export
 from .session import default_base_dir, list_accounts, restore_session, save_session, switch_to
+
+# 1 = upload failed, 2 = not signed in / not authorised, 3 = findings hit --fail-on.
+EXIT_THRESHOLD = 3
 
 _NOT_SIGNED_IN = (
     "Not signed in. BioAudit stores every scan on your account, so run "
@@ -220,7 +224,8 @@ def cmd_scan_apk(args, cfg: Config) -> int:
     # A static scan reads a file the user chose, so there is no live app to authorise
     # probing against; the GUI treats this the same way.
     return _finish(run, cfg, client, authorised=True,
-                   apk_file_name=os.path.basename(args.apk), client_name=args.client)
+                   apk_file_name=os.path.basename(args.apk), client_name=args.client,
+                   fmt=args.format, output=args.output, fail_on=args.fail_on)
 
 
 def cmd_assess(args, cfg: Config) -> int:
@@ -246,7 +251,8 @@ def cmd_assess(args, cfg: Config) -> int:
 
     apk_name = os.path.basename(args.apk) if args.apk else None
     return _finish(run, cfg, client, authorised=True,
-                   apk_file_name=apk_name, client_name=args.client)
+                   apk_file_name=apk_name, client_name=args.client,
+                   fmt=args.format, output=args.output, fail_on=args.fail_on)
 
 
 def cmd_explain(args, cfg: Config) -> int:
@@ -304,7 +310,9 @@ def cmd_gui(args, cfg: Config) -> int:
 
 
 def _finish(run: TestRun, cfg: Config, client: ApiClient, *, authorised: bool,
-           apk_file_name: str | None, client_name: str | None = None) -> int:
+           apk_file_name: str | None, client_name: str | None = None,
+           fmt: str | None = None, output: str | None = None,
+           fail_on: str | None = None) -> int:
     """Rank, upload to the account (the only place the run is stored), and write the
     report file the user asked for. Uploading is not optional here: skipping it would
     leave the run nowhere at all once the process exits. Explaining findings with AI is
@@ -342,12 +350,32 @@ def _finish(run: TestRun, cfg: Config, client: ApiClient, *, authorised: bool,
         print(retention["message"])
     print(f"Report written to: {path}")
     print(f"For plain-language explanations, run: bioaudit explain {scan_id}")
+
+    if fmt:
+        text = export.render(run, fmt)
+        if output:
+            with open(output, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            print(f"{fmt.upper()} written to: {output}")
+        else:
+            print(text)
+    if export.exceeds(run, fail_on):
+        print(f"Failing the build: a finding is at or above '{fail_on}'.", file=sys.stderr)
+        return EXIT_THRESHOLD
     return 0
 
 
 def _print_findings(run: TestRun) -> None:
     for f in run.ranked():
         print(f"  [{f.severity.label:8}] {f.title}  ({', '.join(f.owasp + f.masvs)})")
+
+
+def _add_ci_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--format", choices=["json", "sarif"],
+                        help="also emit the run in a machine-readable format")
+    parser.add_argument("--output", help="write --format output to this file, not stdout")
+    parser.add_argument("--fail-on", choices=export.FAIL_ON_CHOICES,
+                        help="exit 3 when any finding is at or above this severity")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -406,6 +434,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("scan-apk", help="static analysis of an APK (no device)")
     s.add_argument("apk")
     s.add_argument("--client", help="client name to record in the authorisation record")
+    _add_ci_flags(s)
     s.set_defaults(func=cmd_scan_apk)
 
     a = sub.add_parser("assess", help="full black-box assessment on a connected device")
@@ -414,6 +443,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--i-am-authorized", action="store_true",
                    help="confirm you own or are authorized to test this app")
     a.add_argument("--client", help="client name to record in the authorisation record")
+    _add_ci_flags(a)
     a.set_defaults(func=cmd_assess)
 
     e = sub.add_parser("explain", help="ask the server to explain a saved run's findings")

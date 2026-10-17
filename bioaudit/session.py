@@ -25,6 +25,7 @@ from typing import Optional
 from .api import ApiClient, ApiClientError, Session
 
 SESSION_FILENAME = "session.json"
+REFRESH_TOKEN_ENV = "BIOAUDIT_REFRESH_TOKEN"
 
 
 @dataclass(frozen=True)
@@ -160,7 +161,21 @@ def _restore(base_dir, email: str, default_base_url: str) -> Optional[ApiClient]
 
 
 def restore_session(base_dir: str | os.PathLike, default_base_url: str) -> Optional[ApiClient]:
-    """Rebuild a signed-in client for the active saved account, or return None."""
+    """Rebuild a signed-in client for the active saved account, or return None.
+
+    `BIOAUDIT_REFRESH_TOKEN` takes priority so a CI job can sign in without a saved
+    session file. It is never written to disk, and a failed refresh returns None.
+    """
+    env_token = os.environ.get(REFRESH_TOKEN_ENV)
+    if env_token:
+        client = ApiClient(default_base_url)
+        client.session = Session(id_token="", refresh_token=env_token)
+        try:
+            client.refresh()
+            client.get_profile()
+        except ApiClientError:
+            return None
+        return client
     active = _read(base_dir)["active"]
     if active is None:
         return None

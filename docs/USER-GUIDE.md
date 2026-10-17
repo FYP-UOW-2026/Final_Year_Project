@@ -265,6 +265,23 @@ BioAudit.exe logout
 `login` remembers you, so later commands just work. `--i-am-authorized` is the same
 authorisation gate as the tick box, and `assess` refuses to run without it.
 
+### Using it in a build pipeline
+
+`scan-apk` and `assess` take `--format json|sarif`, `--output <file>` and
+`--fail-on low|medium|high|critical`. The command exits `3` when any finding is at or
+above that severity (`1` means the upload failed, `2` means not signed in), so a CI job
+can fail the build. Without `--output` the report is printed to stdout after the
+summary, so use `--output` when a tool reads the file.
+
+```
+bioaudit scan-apk app.apk --format sarif --output bioaudit.sarif --fail-on high
+```
+
+A pipeline has no saved session. Set `BIOAUDIT_REFRESH_TOKEN` to the refresh token of a
+dedicated account (a verified student or team member, or a solo team owner) and the
+command signs in from it. The token is never written to disk. Keep it in the CI secret
+store. Changing that account's password or team revokes it.
+
 There is also `BioAudit.exe dashboard`, a browser view of your account's history (needs
 `streamlit` installed and a `login` first).
 
