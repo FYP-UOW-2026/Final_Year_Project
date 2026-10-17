@@ -17,7 +17,7 @@ everything around it:
 | Generating AI explanations | Converting an exported report to PDF |
 | Organisations, invitations, member oversight | |
 
-Two consequences worth noting. The Groq API key lives on the server, so it is never shipped
+Two consequences worth noting. The AI provider keys (Gemini by default, Groq as fallback) live on the server, so it is never shipped
 inside a downloadable program and can be replaced centrally. And detection stays deterministic:
 the rules in the desktop app decide what a problem is, and the AI here only puts a confirmed
 finding into readable words.
@@ -26,8 +26,8 @@ finding into readable words.
 
 - Node.js 18.17 or newer
 - A Firebase project with **Firestore** and **Email/Password authentication** enabled
-- A Groq API key, only if you want AI explanations (free, no card required, from
-  console.groq.com)
+- A Gemini API key (default provider) and/or a Groq API key (fallback, free from
+  console.groq.com), only if you want AI explanations
 
 ## Setup
 
@@ -45,7 +45,7 @@ Filling in `.env` needs three things from the Firebase console:
    the key grants full access to your project.
 2. **Web API key.** Project settings, General, Web API Key. The Admin SDK cannot check a
    password, so sign-in calls Google's Identity Toolkit with this key.
-3. **Groq API key**, if you want explanations. Leave it blank and the rest of the API works
+3. **Gemini and/or Groq API key**, if you want explanations. Leave it blank and the rest of the API works
    normally, with the explain endpoint reporting that the feature is switched off.
 
 Then deploy the database rules:
@@ -275,8 +275,8 @@ retrieved again.
 
 ## Security decisions worth knowing
 
-**Admins cannot read their members' findings.** The tool promises that an app's code never
-leaves the machine it was scanned on. An admin can see that a member ran a scan and how many
+**Admins cannot read their members' findings.** The APK and raw device data stay on the machine
+that scanned them; only redacted findings are uploaded to the account. An admin can see that a member ran a scan and how many
 problems it found, which is what oversight needs, but not the evidence pulled out of the
 member's app. That read is also written to the audit log.
 
@@ -330,7 +330,7 @@ backend/
 
 `src/services/aiGraph.service.js` is a LangGraph rebuild of the explanation layer, wired in
 at `scans.routes.js` and `reports.routes.js` in place of the old single-shot
-`gemini.service.js`/`groq.service.js` calls, both left in the tree unused. It routes each
+`groq.service.js` call, left in the tree unused (`gemini.service.js` has been removed). It routes each
 call through `aiModelRouter.js`'s fallback chain (Gemini, then Groq, then any configured
 Ollama models, then OpenAI once enabled), trying the next provider when one fails outright.
 
@@ -349,17 +349,17 @@ const session = createSession({
 });
 
 const { result } = await session.explain(`Explain finding ${index} in scan ${scan.id}.`);
-// result: { explanation, mitigation, references } -- same shape gemini.service.js returns
+// result: { explanation, mitigation, references } -- same shape the old single-shot services returned
 ```
 
 Four modes: `explain` (one finding, matches today's endpoint), `synthesize` (a whole scan),
 `compare` (the diff between two scans, narrated), `report` (feeds a future export path).
 
-Every tool's return value passes through one egress guard before it can reach Gemini:
+Every tool's return value passes through one egress guard before it can reach the AI provider:
 redacted, capped (800 characters for evidence, 200 for labels), stripped to an explicit
 allowlist of keys. `compare_scans` drops evidence from both scans entirely — a diff needs
 categories, not two scans' worth of provider rows. This matters because a tool call's return
-is appended to the conversation and sent back to Gemini on the next turn regardless of which
+is appended to the conversation and sent back to the provider on the next turn regardless of which
 tool ran first, so the guard has to sit on every tool's output, not just the first one
 called.
 
