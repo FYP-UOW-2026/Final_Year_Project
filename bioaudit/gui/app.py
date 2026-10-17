@@ -289,6 +289,7 @@ def run(cfg: Config | None = None) -> int:
             # is used rather than a plain bool because it is written on the UI thread and
             # read on the worker thread.
             self._cancel_event = None
+            self._client_name = ""
             # Set when a run has been saved to the account, which is what the server-backed
             # explain and export buttons need.
             self._last_scan_id: str | None = None
@@ -809,7 +810,8 @@ def run(cfg: Config | None = None) -> int:
 
             try:
                 result = self.api.upload_run(
-                    run_, authorised=authorised, apk_file_name=apk_file_name
+                    run_, authorised=authorised, apk_file_name=apk_file_name,
+                    client_name=self._client_name or None,
                 )
                 into["scan_id"] = result["scan"]["id"]
                 retention = result.get("retention")
@@ -995,6 +997,10 @@ def run(cfg: Config | None = None) -> int:
                 "I own this app, or I have permission to test it")
             self.scan_authorized.setStyleSheet("font-weight: 600;")
             al.addWidget(self.scan_authorized)
+            self.scan_client = QLineEdit()
+            self.scan_client.setPlaceholderText(
+                "Client name for the authorisation record (optional)")
+            al.addWidget(self.scan_client)
             al.addWidget(_hint(
                 "Required. Assessing an app you do not own or have permission to test "
                 "can be an offence."))
@@ -1102,6 +1108,7 @@ def run(cfg: Config | None = None) -> int:
             apk_name = os.path.basename(apk)
             # Read on the main thread: the worker must not touch a widget.
             authorised = self.scan_authorized.isChecked()
+            self._client_name = self.scan_client.text().strip()
 
             def job(report) -> TestRun:
                 # Heavy work on the worker thread; the report (weasyprint/GTK) is
@@ -1192,6 +1199,10 @@ def run(cfg: Config | None = None) -> int:
                 "I own this app, or I have permission to test it")
             self.assess_authorized.setStyleSheet("font-weight: 600;")
             al.addWidget(self.assess_authorized)
+            self.assess_client = QLineEdit()
+            self.assess_client.setPlaceholderText(
+                "Client name for the authorisation record (optional)")
+            al.addWidget(self.assess_client)
             al.addWidget(_hint(
                 "Required. This test opens the app's screens on a real device, and testing "
                 "an app without permission can be an offence."))
@@ -1361,6 +1372,7 @@ def run(cfg: Config | None = None) -> int:
             selected_serial = serial if self.device_combo.isEnabled() else None
             sync_result: dict = {}
             apk_name = os.path.basename(apk) if apk else None
+            self._client_name = self.assess_client.text().strip()
 
             def job(report) -> TestRun:
                 stop = self._cancel_event

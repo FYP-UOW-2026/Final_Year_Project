@@ -109,7 +109,7 @@ await check("registering with a short password is rejected with a clear message"
   const res = await fetch(`${base}/api/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: "someone@example.com", password: "short" }),
+    body: JSON.stringify({ email: "someone@example.com", password: "short", tosAccepted: true }),
   });
   assert.equal(res.status, 400);
   const body = await res.json();

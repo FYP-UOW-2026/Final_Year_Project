@@ -43,7 +43,7 @@ def make_register_form(base_url: str):
     """Build the form. Call `.submit(client)`; it returns an error message or None."""
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import (
-        QButtonGroup, QComboBox, QCompleter, QFormLayout, QHBoxLayout, QLabel,
+        QButtonGroup, QCheckBox, QComboBox, QCompleter, QFormLayout, QHBoxLayout, QLabel,
         QLineEdit, QPushButton, QStackedWidget, QVBoxLayout, QWidget,
     )
 
@@ -92,6 +92,11 @@ def make_register_form(base_url: str):
             self.pages.addWidget(self._build_student_page())
             self.pages.addWidget(self._build_team_page())
             layout.addWidget(self.pages)
+            self.tos_box = QCheckBox(
+                "I accept the Terms of Use: I will only test apps I own or am "
+                "authorised to test.")
+            self.tos_box.setToolTip("See docs/TERMS.md")
+            layout.addWidget(self.tos_box)
             self.mode_group.idClicked.connect(self.pages.setCurrentIndex)
 
         # ---- pages -------------------------------------------------------- #
@@ -207,6 +212,8 @@ def make_register_form(base_url: str):
 
         def submit(self, client: ApiClient) -> Optional[str]:
             """Validate, then register. Returns a message to show, or None on success."""
+            if not self.tos_box.isChecked():
+                return "Accept the Terms of Use to create an account."
             if self.pages.currentIndex() == TEAM:
                 org = self.team_org.text().strip()
                 email = self.team_email.text().strip()
@@ -218,7 +225,8 @@ def make_register_form(base_url: str):
                 if problem := _password_problem(password, self.team_confirm.text()):
                     return problem
                 client.register_admin(email, password, org,
-                                      self.team_name.text().strip() or None)
+                                      self.team_name.text().strip() or None,
+                                      tos_accepted=True)
                 return None
 
             found, uni = self._selected_university()
@@ -234,7 +242,8 @@ def make_register_form(base_url: str):
             if problem := _password_problem(password, self.stu_confirm.text()):
                 return problem
             client.register(email, password, self.stu_name.text().strip() or None,
-                            university_id=uni["id"] if uni else None)
+                            university_id=uni["id"] if uni else None,
+                            tos_accepted=True)
             return None
 
     return RegisterForm()

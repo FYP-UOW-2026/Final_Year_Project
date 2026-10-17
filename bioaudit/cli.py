@@ -92,13 +92,22 @@ def cmd_register(args, cfg: Config) -> int:
         print("Use a password of at least 8 characters.", file=sys.stderr)
         return 2
 
+    if not args.accept_terms:
+        print("BioAudit may only be used on apps you own or are authorised to test "
+              "(see docs/TERMS.md).")
+        answer = input("Do you accept the Terms of Use? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("You must accept the Terms of Use to create an account.", file=sys.stderr)
+            return 2
+
     client = ApiClient(server)
     try:
         if args.organisation:
-            client.register_admin(args.email, password, args.organisation, args.name)
+            client.register_admin(args.email, password, args.organisation, args.name,
+                                  tos_accepted=True)
         else:
             client.register(args.email, password, args.name,
-                            university_id=args.university)
+                            university_id=args.university, tos_accepted=True)
             if args.join_token:
                 # Joining revokes the session server-side so the new team permissions
                 # take effect, so a fresh sign-in follows, matching the GUI's join flow.
@@ -184,7 +193,8 @@ def cmd_scan_apk(args, cfg: Config) -> int:
     run = core.build_scan_apk(args.apk, cfg)
     # A static scan reads a file the user chose, so there is no live app to authorise
     # probing against; the GUI treats this the same way.
-    return _finish(run, cfg, client, authorised=True, apk_file_name=os.path.basename(args.apk))
+    return _finish(run, cfg, client, authorised=True,
+                   apk_file_name=os.path.basename(args.apk), client_name=args.client)
 
 
 def cmd_assess(args, cfg: Config) -> int:
@@ -209,7 +219,8 @@ def cmd_assess(args, cfg: Config) -> int:
         return 1
 
     apk_name = os.path.basename(args.apk) if args.apk else None
-    return _finish(run, cfg, client, authorised=True, apk_file_name=apk_name)
+    return _finish(run, cfg, client, authorised=True,
+                   apk_file_name=apk_name, client_name=args.client)
 
 
 def cmd_explain(args, cfg: Config) -> int:
@@ -267,7 +278,7 @@ def cmd_gui(args, cfg: Config) -> int:
 
 
 def _finish(run: TestRun, cfg: Config, client: ApiClient, *, authorised: bool,
-           apk_file_name: str | None) -> int:
+           apk_file_name: str | None, client_name: str | None = None) -> int:
     """Rank, upload to the account (the only place the run is stored), and write the
     report file the user asked for. Uploading is not optional here: skipping it would
     leave the run nowhere at all once the process exits. Explaining findings with AI is
@@ -281,7 +292,8 @@ def _finish(run: TestRun, cfg: Config, client: ApiClient, *, authorised: bool,
     _print_findings(run)
 
     try:
-        result = client.upload_run(run, authorised=authorised, apk_file_name=apk_file_name)
+        result = client.upload_run(run, authorised=authorised, apk_file_name=apk_file_name,
+                                   client_name=client_name)
         upload_failed = None
     except ApiClientError as exc:
         upload_failed = exc
@@ -342,6 +354,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--university", metavar="ID",
                    help="your university's id from GET /api/universities; the email "
                         "must be one it issues (student accounts)")
+    r.add_argument("--accept-terms", action="store_true",
+                   help="accept the Terms of Use (docs/TERMS.md) without being prompted")
     r.set_defaults(func=cmd_register)
 
     w = sub.add_parser("whoami", help="show who is currently signed in")
@@ -355,6 +369,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("scan-apk", help="static analysis of an APK (no device)")
     s.add_argument("apk")
+    s.add_argument("--client", help="client name to record in the authorisation record")
     s.set_defaults(func=cmd_scan_apk)
 
     a = sub.add_parser("assess", help="full black-box assessment on a connected device")
@@ -362,6 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--apk", help="APK on disk (enables the IPC oracle + static analysis)")
     a.add_argument("--i-am-authorized", action="store_true",
                    help="confirm you own or are authorized to test this app")
+    a.add_argument("--client", help="client name to record in the authorisation record")
     a.set_defaults(func=cmd_assess)
 
     e = sub.add_parser("explain", help="ask the server to explain a saved run's findings")

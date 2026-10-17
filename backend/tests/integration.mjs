@@ -60,6 +60,10 @@ function group(title) {
 
 /** Thin request helper that returns status and parsed body together. */
 async function call(method, path, { token, body } = {}) {
+  // Every signup must accept the Terms; tests opt out by passing tosAccepted explicitly.
+  if (path.startsWith("/auth/register") && body && !("tosAccepted" in body)) {
+    body = { ...body, tosAccepted: true };
+  }
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: {
@@ -120,6 +124,20 @@ await check("registering creates the account and returns a usable session", asyn
   assert.equal(body.user.studentVerification.eligible, true);
   userToken = body.session.idToken;
   userUid = body.user.id;
+});
+
+await check("registering without accepting the Terms is rejected", async () => {
+  const { status, body } = await call("POST", "/auth/register", {
+    body: { email: `notos-${unique()}@example.com`, password: userPassword, tosAccepted: false },
+  });
+  assert.equal(status, 400, JSON.stringify(body));
+  assert.match(JSON.stringify(body), /Terms of Use/i);
+});
+
+await check("the accepted Terms version is stored on the profile", async () => {
+  const { status, body } = await call("GET", "/users/me", { token: userToken });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.match(body.user.tosVersion, /^\d{4}-\d{2}$/);
 });
 
 await check("the same email cannot register twice", async () => {
@@ -315,6 +333,22 @@ await check("a scan is stored with its severity counts worked out", async () => 
   assert.equal(body.scan.counts.critical, 1);
   assert.equal(body.scan.counts.high, 1);
   firstScanId = body.scan.id;
+});
+
+await check("a per-scan authorisation record is stored on the scan", async () => {
+  const authorisation = {
+    client: "Acme Bank",
+    target: "com.example.app",
+    statement: "Written permission from the app owner",
+    at: new Date().toISOString(),
+  };
+  const created = await call("POST", "/scans", {
+    token: userToken,
+    body: { ...scanPayload("com.example.app"), authorisation },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const stored = (await db.collection("scans").doc(created.body.scan.id).get()).data();
+  assert.equal(stored.authorisation.client, "Acme Bank");
 });
 
 await check("a device assessment without an authorisation confirmation is refused", async () => {
