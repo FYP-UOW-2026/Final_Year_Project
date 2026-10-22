@@ -120,6 +120,8 @@ export function renderScanReportHtml(scan, { owner } = {}) {
     <tr><th>Started</th><td>${escapeHtml(formatDate(scan.startedAt ?? scan.createdAt))}</td></tr>
     <tr><th>Finished</th><td>${escapeHtml(formatDate(scan.finishedAt))}</td></tr>
     <tr><th>Authorisation confirmed</th><td>${scan.authorisationConfirmed ? "Yes" : "Not applicable"}</td></tr>
+    ${scan.authorisation?.client ? `<tr><th>Tested for</th><td>${escapeHtml(scan.authorisation.client)}</td></tr>` : ""}
+    ${scan.authorisation?.statement ? `<tr><th>Authorisation statement</th><td>${escapeHtml(scan.authorisation.statement)}${scan.authorisation.at ? ` (${escapeHtml(scan.authorisation.at)})` : ""}</td></tr>` : ""}
   </table>
 
   <h2>Summary</h2>

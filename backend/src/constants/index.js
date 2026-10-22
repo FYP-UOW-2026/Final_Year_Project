@@ -43,6 +43,9 @@ export const STUDENT_STATUS = {
   VERIFIED: "verified",
 };
 
+/** Bump when docs/TERMS.md changes materially; stored with each acceptance. */
+export const TOS_VERSION = "2026-10";
+
 export const SCAN_TYPES = {
   APK: "apk",
   DEVICE: "device",

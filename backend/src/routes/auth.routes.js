@@ -12,7 +12,7 @@ import { z } from "zod";
 
 import { env } from "../config/env.js";
 import { auth } from "../config/firebase.js";
-import { ROLES } from "../constants/index.js";
+import { ROLES, TOS_VERSION } from "../constants/index.js";
 import { requireAuth } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import * as audit from "../services/audit.service.js";
@@ -39,6 +39,11 @@ const authLimiter = rateLimit({
 });
 
 const emailSchema = z.string().trim().toLowerCase().email("Enter a valid email address.");
+// Registration is refused without it; the accepted version and time are stored on the
+// user doc so a later terms change can ask existing users to accept again.
+const tosSchema = z.literal(true, {
+  errorMap: () => ({ message: "You must accept the Terms of Use to create an account." }),
+});
 const passwordSchema = z
   .string()
   .min(8, "Use at least 8 characters.")
@@ -132,6 +137,7 @@ router.post(
     body: z.object({
       email: emailSchema,
       password: passwordSchema,
+      tosAccepted: tosSchema,
       displayName: z.string().trim().min(1).max(80).optional(),
       universityId: universityIdSchema,
       code: z
@@ -161,6 +167,7 @@ router.post(
       password: req.body.password,
       displayName: req.body.displayName,
       role: ROLES.MEMBER,
+      tosVersion: TOS_VERSION,
       universityId: req.body.universityId ?? null,
       studentVerified: true,
     });
@@ -188,6 +195,7 @@ async function registerInvitee(req, res) {
     password: req.body.password,
     displayName: req.body.displayName,
     role: ROLES.MEMBER,
+    tosVersion: TOS_VERSION,
   });
 
   let joined;
@@ -231,8 +239,11 @@ router.post(
     body: z.object({
       email: emailSchema,
       password: passwordSchema,
+      tosAccepted: tosSchema,
       displayName: z.string().trim().min(1).max(80).optional(),
       organisationName: z.string().trim().min(2, "Give your organisation a name.").max(120),
+      // A freelancer's one-person team: its owner may also run scans (see denyAdmin).
+      solo: z.boolean().optional(),
     }),
   }),
   asyncHandler(async (req, res) => {
@@ -241,11 +252,13 @@ router.post(
       password: req.body.password,
       displayName: req.body.displayName,
       role: ROLES.ADMIN,
+      tosVersion: TOS_VERSION,
     });
 
     const organisation = await organisations.createOrganisation({
       name: req.body.organisationName,
       ownerId: profile.uid,
+      solo: req.body.solo,
     });
 
     // The organisation id only exists once the organisation has been created, so the

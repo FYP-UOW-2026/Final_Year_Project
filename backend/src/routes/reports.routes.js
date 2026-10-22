@@ -33,6 +33,13 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 const router = Router();
 router.use(requireAuth, loadProfile);
 
+const authorisationSchema = z.object({
+  client: z.string().trim().max(200).nullish(),
+  target: z.string().trim().max(300).nullish(),
+  statement: z.string().trim().max(1000).nullish(),
+  at: z.string().datetime().nullish(),
+});
+
 const findingSchema = z.object({
   category: z.string().trim().min(1).max(120),
   title: z.string().trim().min(1).max(300),
@@ -71,6 +78,8 @@ router.post(
       findings: z.array(findingSchema).max(500).default([]),
       toolVersion: z.string().trim().max(40).nullish(),
       authorisationConfirmed: z.boolean().default(false),
+      // Who the test was for and what it covered, as stated by the tester at scan time.
+      authorisation: authorisationSchema.nullish(),
       startedAt: z.string().datetime().nullish(),
       finishedAt: z.string().datetime().nullish(),
     }),

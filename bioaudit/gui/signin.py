@@ -14,11 +14,11 @@ import os
 from typing import Optional
 
 from ..api import Account, ApiClient, ApiClientError
-from ..session import clear_session, save_session
+from ..session import clear_session, forget, list_accounts, save_session, switch_to
 from .register_form import make_register_form
 
 __all__ = [
-    "account_summary", "clear_session", "save_session",
+    "account_summary", "clear_session", "forget", "list_accounts", "save_session", "switch_to",
     "show_signin_dialog", "show_welcome_dialog",
 ]
 
@@ -130,7 +130,8 @@ def show_signin_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
         if remember:
             save_session(base_dir, dialog.client)
         else:
-            clear_session(base_dir)
+            # Only this account is dropped; others the user saved stay switchable.
+            forget(base_dir, dialog.client.account.email)
         return dialog.client, remember
     return None, False
 
@@ -300,7 +301,8 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
                     name = self.join_name.text().strip() or None
                     # Creates the account and redeems the invite in one step, so the
                     # session that comes back already carries the team's permissions.
-                    client.register(email, password, name, invitation_token=token)
+                    client.register(email, password, name, invitation_token=token,
+                                    tos_accepted=True)
 
                 else:  # SIGNIN
                     email = self.login_email.text().strip()
@@ -326,7 +328,8 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
         if remember:
             save_session(base_dir, dialog.client)
         else:
-            clear_session(base_dir)
+            # Only this account is dropped; others the user saved stay switchable.
+            forget(base_dir, dialog.client.account.email)
         return dialog.client, remember
 
     # The dialog was closed without signing in. There is no guest fallback to drop back

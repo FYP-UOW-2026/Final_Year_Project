@@ -47,7 +47,7 @@ def make_register_form(base_url: str):
     """Build the form. Call `.submit(client)`; it returns an error message or None."""
     from PySide6.QtCore import Qt, QTimer
     from PySide6.QtWidgets import (
-        QButtonGroup, QComboBox, QCompleter, QFormLayout, QHBoxLayout, QLabel,
+        QButtonGroup, QCheckBox, QComboBox, QCompleter, QFormLayout, QHBoxLayout, QLabel,
         QLineEdit, QPushButton, QStackedWidget, QVBoxLayout, QWidget,
     )
 
@@ -100,6 +100,11 @@ def make_register_form(base_url: str):
             self.pages.addWidget(self._build_student_page())
             self.pages.addWidget(self._build_team_page())
             layout.addWidget(self.pages)
+            self.tos_box = QCheckBox(
+                "I accept the Terms of Use: I will only test apps I own or am "
+                "authorised to test.")
+            self.tos_box.setToolTip("See docs/TERMS.md")
+            layout.addWidget(self.tos_box)
             self.mode_group.idClicked.connect(self.pages.setCurrentIndex)
 
             # (email, sendId, deadline) of the code being watched for a bounce.
@@ -198,12 +203,14 @@ def make_register_form(base_url: str):
             self.team_email.setPlaceholderText("you@company.com")
             self.team_password = password_field("At least 8 characters")
             self.team_confirm = password_field()
+            self.team_solo = QCheckBox("I work alone (freelancer or consultant)")
 
             form.addRow("Organisation:", self.team_org)
             form.addRow("Name:", self.team_name)
             form.addRow("Work email:", self.team_email)
             form.addRow("Password:", self.team_password)
             form.addRow("Confirm:", self.team_confirm)
+            form.addRow("", self.team_solo)
             form.addRow("", hint(
                 "Creates a team and makes you its admin, so you can invite colleagues "
                 "and oversee their assessments. Joining someone else's team? Use the "
@@ -313,6 +320,8 @@ def make_register_form(base_url: str):
 
         def submit(self, client: ApiClient) -> Optional[str]:
             """Validate, then register. Returns a message to show, or None on success."""
+            if not self.tos_box.isChecked():
+                return "Accept the Terms of Use to create an account."
             if self.pages.currentIndex() == TEAM:
                 org = self.team_org.text().strip()
                 email = self.team_email.text().strip()
@@ -324,7 +333,9 @@ def make_register_form(base_url: str):
                 if problem := _password_problem(password, self.team_confirm.text()):
                     return problem
                 client.register_admin(email, password, org,
-                                      self.team_name.text().strip() or None)
+                                      self.team_name.text().strip() or None,
+                                      tos_accepted=True,
+                                      solo=self.team_solo.isChecked())
                 return None
 
             problem, email, uni = self._student_details()
@@ -338,7 +349,8 @@ def make_register_form(base_url: str):
                 return ("Press Send code, then enter the six-digit code we email to your "
                         "university address.")
             client.register(email, password, self.stu_name.text().strip() or None,
-                            university_id=uni["id"] if uni else None, code=code)
+                            university_id=uni["id"] if uni else None, code=code,
+                            tos_accepted=True)
             return None
 
     return RegisterForm()

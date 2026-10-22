@@ -49,7 +49,7 @@ The first thing you see is a welcome screen with three tabs:
 
 | Tab | Use it when |
 |---|---|
-| **Create account** | You are new. As a student, pick your university, enter your university email twice and a password, then press **Send code** and type in the six-digit code we email you. Your account is created once the code checks out. If the address turns out not to exist, the form tells you within a minute or two, so fix it and press **Send again**. Setting up a team instead? Choose **I'm setting up a team**. |
+| **Create account** | You are new. As a student, pick your university, enter your university email twice and a password, then press **Send code** and type in the six-digit code we email you. Tick **I accept the Terms of Use**, and your account is created once the code checks out. If the address turns out not to exist, the form tells you within a minute or two, so fix it and press **Send again**. Setting up a team instead? Choose **I'm setting up a team**. |
 | **Join with an invite** | An admin sent you an invitation token for their team. Any email address works here. |
 | **Sign in** | You already have an account. |
 
@@ -200,6 +200,10 @@ happens. If you are removed from a team, your account becomes a student account 
 Admin accounts oversee a team rather than running scans, so they do not see the Scan,
 Assess or History pages.
 
+**Working alone?** Tick *I work alone* (CLI: `--organisation "Name" --solo`) when creating a team.
+A one-person team lets you scan as its owner. Once a second person joins, the owner goes back
+to overseeing only.
+
 ---
 
 ## 7. Teams
@@ -260,6 +264,23 @@ BioAudit.exe logout
 
 `login` remembers you, so later commands just work. `--i-am-authorized` is the same
 authorisation gate as the tick box, and `assess` refuses to run without it.
+
+### Using it in a build pipeline
+
+`scan-apk` and `assess` take `--format json|sarif`, `--output <file>` and
+`--fail-on low|medium|high|critical`. The command exits `3` when any finding is at or
+above that severity (`1` means the upload failed, `2` means not signed in), so a CI job
+can fail the build. Without `--output` the report is printed to stdout after the
+summary, so use `--output` when a tool reads the file.
+
+```
+bioaudit scan-apk app.apk --format sarif --output bioaudit.sarif --fail-on high
+```
+
+A pipeline has no saved session. Set `BIOAUDIT_REFRESH_TOKEN` to the refresh token of a
+dedicated account (a verified student or team member, or a solo team owner) and the
+command signs in from it. The token is never written to disk. Keep it in the CI secret
+store. Changing that account's password or team revokes it.
 
 There is also `BioAudit.exe dashboard`, a browser view of your account's history (needs
 `streamlit` installed and a `login` first).

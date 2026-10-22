@@ -11,6 +11,7 @@ import { auth, db, FieldValue } from "../config/firebase.js";
 import { env } from "../config/env.js";
 import { COLLECTIONS, ROLES, STUDENT_STATUS, TIERS, tierFor } from "../constants/index.js";
 import { ApiError } from "../utils/ApiError.js";
+import { deleteReportsForUser } from "./scans.service.js";
 import * as studentVerification from "./studentVerification.service.js";
 
 const users = () => db.collection(COLLECTIONS.USERS);
@@ -45,6 +46,7 @@ export async function createAccount({
   organisationId = null,
   universityId = null,
   studentVerified = false,
+  tosVersion = null,
 }) {
   let userRecord;
   try {
@@ -83,6 +85,8 @@ export async function createAccount({
           verifiedAt: null,
           universityId,
         },
+    tosVersion,
+    tosAcceptedAt: tosVersion ? FieldValue.serverTimestamp() : null,
     scanCount: 0,
     createdAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
@@ -299,6 +303,8 @@ export async function deleteAccount(uid) {
     if (snap.size < 400) break;
   }
 
+  // Saved report exports carry the same findings and evidence as the scans themselves.
+  await deleteReportsForUser(uid);
   await studentVerification.discardCode(uid);
   await users().doc(uid).delete();
   await auth.deleteUser(uid).catch((error) => {
@@ -316,6 +322,7 @@ export function toPublicProfile(profile) {
     role: profile.role,
     organisationId: profile.organisationId,
     scanCount: profile.scanCount ?? 0,
+    tosVersion: profile.tosVersion ?? null,
     // Included so a client can show the remaining allowance before spending it, rather
     // than only finding out at the point of refusal.
     aiQuota: aiQuotaFor(profile),

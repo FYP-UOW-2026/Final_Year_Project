@@ -24,10 +24,11 @@ const invitations = () => db.collection(COLLECTIONS.INVITATIONS);
 const flags = () => db.collection(COLLECTIONS.FLAGS);
 const users = () => db.collection(COLLECTIONS.USERS);
 
-export async function createOrganisation({ name, ownerId }) {
+export async function createOrganisation({ name, ownerId, solo = false }) {
   const doc = {
     name,
     ownerId,
+    solo: Boolean(solo),
     adminIds: [ownerId],
     memberIds: [ownerId],
     createdAt: FieldValue.serverTimestamp(),

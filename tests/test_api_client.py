@@ -90,7 +90,7 @@ def _register_student(client: ApiClient, email: str, display_name: Optional[str]
     client.send_signup_code(email, university_id)
     _plant_code("signupVerifications", hashlib.sha256(email.encode()).hexdigest(), email)
     return client.register(email, "pytest-password-1", display_name,
-                           university_id=university_id, code=KNOWN_CODE)
+                           university_id=university_id, code=KNOWN_CODE, tos_accepted=True)
 
 
 def _verify_student(client: ApiClient) -> None:
@@ -151,8 +151,10 @@ def test_register_then_read_profile(client: ApiClient):
 
 def test_student_cannot_register_without_a_code(client: ApiClient):
     with pytest.raises(ApiClientError) as exc:
-        client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1")
+        client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1",
+                        tos_accepted=True)
     assert exc.value.status == 400
+    assert "Verify your university email" in exc.value.message
     assert not client.signed_in
 
 
@@ -277,13 +279,13 @@ def test_student_is_blocked_from_team_features(signed_in: ApiClient):
 
 def test_team_member_can_compare_and_export(client: ApiClient):
     _, organisation = client.register_admin(
-        f"pytest-admin-{_unique()}@example.com", "pytest-password-1", "Pytest Team")
+        f"pytest-admin-{_unique()}@example.com", "pytest-password-1", "Pytest Team", tos_accepted=True)
     member_email = f"pytest-member-{_unique()}@example.com"
     invitation = client.invite_member(organisation["id"], member_email)
 
     member = ApiClient(BASE_URL)
     account = member.register(member_email, "pytest-password-1",
-                              invitation_token=invitation["token"])
+                              invitation_token=invitation["token"], tos_accepted=True)
     # Registering with an invitation joins the team in the same step.
     assert account.is_team
     assert account.tier == "team"
@@ -316,8 +318,7 @@ def test_delete_and_clear_history(signed_in: ApiClient):
 def test_admin_can_invite_and_manage_a_member(client: ApiClient):
     admin_email = f"pytest-admin-{_unique()}@example.com"
     account, organisation = client.register_admin(
-        admin_email, "pytest-password-1", "Pytest Security Team", "Owner"
-    )
+        admin_email, "pytest-password-1", "Pytest Security Team", "Owner", tos_accepted=True)
     assert account.is_admin
     org_id = organisation["id"]
 
@@ -327,7 +328,7 @@ def test_admin_can_invite_and_manage_a_member(client: ApiClient):
 
     member = ApiClient(BASE_URL)
     member.register(member_email, "pytest-password-1", "Member",
-                    invitation_token=invitation["token"])
+                    invitation_token=invitation["token"], tos_accepted=True)
 
     members = client.list_members(org_id)
     assert member_email in {m["email"] for m in members}
@@ -342,8 +343,7 @@ def test_admin_cannot_see_member_findings(client: ApiClient):
     """The privacy line this project promises: an app's code stays on its own machine."""
     admin_email = f"pytest-admin-{_unique()}@example.com"
     _, organisation = client.register_admin(
-        admin_email, "pytest-password-1", "Pytest Team"
-    )
+        admin_email, "pytest-password-1", "Pytest Team", tos_accepted=True)
     org_id = organisation["id"]
 
     member_email = f"pytest-member-{_unique()}@example.com"
@@ -351,7 +351,7 @@ def test_admin_cannot_see_member_findings(client: ApiClient):
 
     member = ApiClient(BASE_URL)
     member_account = member.register(member_email, "pytest-password-1",
-                                     invitation_token=invitation["token"])
+                                     invitation_token=invitation["token"], tos_accepted=True)
     member.upload_run(_sample_run("com.member.private"), authorised=True)
 
     scans = client.member_scans(org_id, member_account.id)
@@ -360,9 +360,32 @@ def test_admin_cannot_see_member_findings(client: ApiClient):
     assert scans[0]["counts"], "but the severity counts should be visible"
 
 
+def test_solo_owner_can_upload_their_own_scan(client: ApiClient):
+    client.register_admin(f"pytest-solo-{_unique()}@example.com", "pytest-password-1",
+                          "Pytest Solo", tos_accepted=True, solo=True)
+    result = client.upload_run(_sample_run(), authorised=True)
+    assert result["scan"]["findingCount"] == 2
+
+
+def test_team_admin_without_solo_cannot_upload(client: ApiClient):
+    client.register_admin(f"pytest-nosolo-{_unique()}@example.com", "pytest-password-1",
+                          "Pytest Team Two", tos_accepted=True)
+    with pytest.raises(ApiClientError) as exc:
+        client.upload_run(_sample_run(), authorised=True)
+    assert exc.value.status == 403
+
+
+def test_register_requires_terms(client: ApiClient):
+    with pytest.raises(ApiClientError) as exc:
+        client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1",
+                        tos_accepted=False)
+    assert exc.value.status == 400
+    assert "Terms of Use" in str(exc.value)
+
+
 def test_error_message_is_human_readable(client: ApiClient):
     with pytest.raises(ApiClientError) as exc:
-        client.register("not-an-email", "short")
+        client.register("not-an-email", "short", tos_accepted=True)
     assert exc.value.status == 400
     # The GUI shows these directly, so they have to read as sentences.
     assert exc.value.details, "validation errors should list the offending fields"

@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ..models import Finding, TestRun
+from ..redact import redact
 
 DEFAULT_BASE_URL = "http://127.0.0.1:4000/api"
 DEFAULT_TIMEOUT = 30.0
@@ -270,15 +271,17 @@ class ApiClient:
                  display_name: Optional[str] = None,
                  university_id: Optional[str] = None,
                  code: Optional[str] = None,
-                 invitation_token: Optional[str] = None) -> Account:
+                 invitation_token: Optional[str] = None,
+                 tos_accepted: bool = False) -> Account:
         """Create a personal account, signed in.
 
         A student passes the `code` that send_signup_code() emailed them, and the same
         `university_id` (from list_universities()) if they picked one. Someone invited to
         a team passes `invitation_token` instead, and the account joins that team in the
-        same step.
+        same step. `tos_accepted` records that the user agreed to docs/TERMS.md; the
+        server refuses signup without it.
         """
-        payload = {"email": email, "password": password}
+        payload = {"email": email, "password": password, "tosAccepted": bool(tos_accepted)}
         if display_name:
             payload["displayName"] = display_name
         if university_id:
@@ -294,10 +297,19 @@ class ApiClient:
         return self.account
 
     def register_admin(self, email: str, password: str, organisation_name: str,
-                       display_name: Optional[str] = None) -> tuple[Account, dict]:
-        """Create an admin account together with the organisation it administers."""
+                       display_name: Optional[str] = None,
+                       tos_accepted: bool = False,
+                       solo: bool = False) -> tuple[Account, dict]:
+        """Create an admin account together with the organisation it administers.
+
+        solo=True marks a one-person team (freelancer): while the owner is its only
+        member they may run scans themselves.
+        """
         payload = {"email": email, "password": password,
-                   "organisationName": organisation_name}
+                   "organisationName": organisation_name,
+                   "tosAccepted": bool(tos_accepted)}
+        if solo:
+            payload["solo"] = True
         if display_name:
             payload["displayName"] = display_name
 
@@ -412,7 +424,8 @@ class ApiClient:
             "title": finding.title,
             "severity": finding.severity.name.lower(),
             "owasp": list(finding.owasp),
-            "evidence": finding.evidence,
+            # Redacted here because the server keeps it and org admins can read it.
+            "evidence": redact(finding.evidence),
             "source": finding.source,
             "confidence": finding.confidence,
             "component": finding.component,
@@ -424,12 +437,14 @@ class ApiClient:
 
     def upload_run(self, run: TestRun, *, authorised: bool,
                    apk_file_name: Optional[str] = None,
-                   tool_version: Optional[str] = None) -> dict:
+                   tool_version: Optional[str] = None,
+                   client_name: Optional[str] = None) -> dict:
         """Save a completed TestRun to the server.
 
         `authorised` records that the user confirmed they own or may test the app. The
         server refuses a device assessment without it, so this mirrors the same gate the
-        CLI and GUI already enforce before running one.
+        CLI and GUI already enforce before running one. `client_name` (who the test is
+        for) is stored with a dated authorisation record on the scan.
         """
         scan_type = "device" if run.device_serial else "apk"
 
@@ -451,6 +466,13 @@ class ApiClient:
             "findings": [self._finding_to_payload(f) for f in run.ranked()],
             "toolVersion": tool_version,
         }
+        if authorised:
+            payload["authorisation"] = {
+                "client": client_name or None,
+                "target": run.package or apk_file_name,
+                "statement": "Tester confirmed they own the app or hold permission to test it.",
+                "at": _iso(time.time()),
+            }
         if run.started_at:
             payload["startedAt"] = _iso(run.started_at)
         if run.finished_at:

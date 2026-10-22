@@ -33,7 +33,7 @@ def render_html(run: TestRun, dark: bool = False) -> str:
         <div class="finding">
           <span class="sev" style="background:{color}">{f.severity.label}</span>
           <strong>{html.escape(f.title)}</strong>
-          <span class="owasp">{html.escape(', '.join(f.owasp))}</span>
+          <span class="owasp">{html.escape(', '.join(f.owasp + f.masvs))}</span>
           <span class="conf">{html.escape(f.confidence)}</span>
           <div class="evidence"><em>Evidence:</em> {html.escape(f.evidence)}</div>
           {_optional('Explanation', f.explanation)}
@@ -163,7 +163,7 @@ def _render_screen(run: TestRun) -> str:
 
     findings = []
     for f in run.ranked():
-        detail = " · ".join(x for x in (", ".join(f.owasp), f.confidence, f.component) if x)
+        detail = " · ".join(x for x in (", ".join(f.owasp + f.masvs), f.confidence, f.component) if x)
         path = ""
         if f.attack_path:
             steps = "".join(f"<li>{esc(s)}</li>" for s in f.attack_path)
