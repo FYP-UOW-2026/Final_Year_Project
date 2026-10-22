@@ -251,8 +251,13 @@ sequenceDiagram
     participant FS as Firestore
 
     U->>GUI: Sign Up -> Create Personal Account
-    GUI->>API: POST /auth/register {email, password}
-    API->>FBA: createUser()
+    GUI->>API: POST /auth/register/send-code {email, universityId}
+    API->>FS: signupVerifications.doc(sha256(email)).set({codeHash, expiresAt})
+    API-->>U: six-digit code by email
+    U->>GUI: enter code
+    GUI->>API: POST /auth/register {email, password, code}
+    API->>FS: check code (5 attempts, 15 min)
+    API->>FBA: createUser(emailVerified: true)
     FBA-->>API: uid
     API->>FS: users.doc(uid).set({tier: free, role: member})
     API->>FBA: setCustomUserClaims(uid, {tier, role})

@@ -10,7 +10,7 @@
  * initialises without contacting Google. No real project is touched.
  */
 import assert from "node:assert/strict";
-import { generateKeyPairSync } from "node:crypto";
+import { createHmac, generateKeyPairSync } from "node:crypto";
 
 const { privateKey } = generateKeyPairSync("rsa", {
   modulusLength: 2048,
@@ -39,6 +39,8 @@ const { mailgunMessage, studentVerificationEmail } = await import(
   "../src/services/email.service.js"
 );
 const { UNIVERSITIES } = await import("../src/data/universities.js");
+const { domainReceivesMail } = await import("../src/services/studentVerification.service.js");
+const { verifyMailgunSignature } = await import("../src/routes/webhooks.routes.js");
 
 const app = createApp();
 const server = app.listen(0);
@@ -245,6 +247,73 @@ await check("the Mailgun message carries both bodies and turns tracking off", ()
   assert.equal(msg.text, "plain");
   assert.equal(msg.html, "<p>html</p>");
   assert.equal(msg["o:tracking"], "no");
+});
+
+await check("a code's send id rides along as Mailgun variables, for its bounce report", () => {
+  const msg = mailgunMessage({
+    from: "BioAudit <postmaster@mg.example.com>",
+    to: "student@u.nus.edu",
+    subject: "048213 is your code",
+    text: "plain",
+    variables: { codeDoc: "signupVerifications/abc", sendId: "f00d" },
+  });
+  assert.equal(msg["v:codeDoc"], "signupVerifications/abc");
+  assert.equal(msg["v:sendId"], "f00d");
+});
+
+console.log("\nMailgun webhook signatures");
+
+await check("a webhook signed with the signing key is accepted, and no other", () => {
+  const key = "smoke-signing-key";
+  const timestamp = "1761120000";
+  const token = "a8ce0edb2dd8301dee6c2405235584e45aa91d1e9f979f3de0";
+  const signature = createHmac("sha256", key).update(timestamp + token).digest("hex");
+
+  assert.equal(verifyMailgunSignature({ timestamp, token, signature }, key), true);
+  assert.equal(verifyMailgunSignature({ timestamp, token, signature }, "another-key"), false);
+  assert.equal(verifyMailgunSignature({ timestamp: "1761120001", token, signature }, key), false);
+  assert.equal(verifyMailgunSignature({ timestamp, token, signature: "abc" }, key), false);
+  assert.equal(verifyMailgunSignature(undefined, key), false);
+  assert.equal(verifyMailgunSignature({ timestamp, token, signature }, ""), false);
+});
+
+console.log("\nMail domain check");
+
+/** A stand-in for DNS: each lookup returns its records, or throws the error code given. */
+function fakeDns({ mx = "ENODATA", a = "ENODATA", aaaa = "ENODATA" }) {
+  const lookup = (answer) => async () => {
+    if (typeof answer === "string") throw Object.assign(new Error(answer), { code: answer });
+    return answer;
+  };
+  return { resolveMx: lookup(mx), resolve4: lookup(a), resolve6: lookup(aaaa) };
+}
+
+await check("a domain with mail servers receives mail", async () => {
+  const dns = fakeDns({ mx: [{ exchange: "mx.ox.ac.uk", priority: 10 }] });
+  assert.equal(await domainReceivesMail("ox.ac.uk", dns), true);
+});
+
+await check("a null MX record means the domain takes no mail", async () => {
+  const dns = fakeDns({ mx: [{ exchange: "", priority: 0 }], a: ["192.0.2.1"] });
+  assert.equal(await domainReceivesMail("no-mail.ac.uk", dns), false);
+});
+
+await check("with no MX records, the domain's own address takes the mail", async () => {
+  assert.equal(await domainReceivesMail("uni.ac.uk", fakeDns({ a: ["192.0.2.1"] })), true);
+  assert.equal(await domainReceivesMail("uni.ac.uk", fakeDns({ aaaa: ["2001:db8::1"] })), true);
+});
+
+await check("a domain with neither MX records nor an address takes no mail", async () => {
+  assert.equal(await domainReceivesMail("parked.ac.uk", fakeDns({})), false);
+});
+
+await check("a domain that does not exist takes no mail", async () => {
+  assert.equal(await domainReceivesMail("ox.ac.ku", fakeDns({ mx: "ENOTFOUND" })), false);
+});
+
+await check("a DNS failure is reported as unknown, not as no mail", async () => {
+  assert.equal(await domainReceivesMail("ox.ac.uk", fakeDns({ mx: "ETIMEOUT" })), null);
+  assert.equal(await domainReceivesMail("ox.ac.uk", fakeDns({ a: "ESERVFAIL" })), null);
 });
 
 console.log("\nUniversity list");

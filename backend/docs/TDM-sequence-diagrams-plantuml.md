@@ -37,8 +37,13 @@ participant "Firebase Auth" as FBA
 participant Firestore
 
 User -> GUI: Sign Up, then Create Personal Account
-GUI -> API: register(email, password)
-API -> FBA: createUser()
+GUI -> API: send signup code(email, universityId)
+API -> Firestore: store code hash for the address
+API --> User: six-digit code by email
+User -> GUI: enter code
+GUI -> API: register(email, password, code)
+API -> Firestore: check code
+API -> FBA: createUser(emailVerified)
 FBA --> API: uid
 API -> Firestore: create user doc, tier=free, role=member
 API -> FBA: setCustomUserClaims(tier, role)

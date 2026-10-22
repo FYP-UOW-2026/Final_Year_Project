@@ -74,8 +74,13 @@ function mailgunErrorMessage(error) {
   return `Mailgun${error?.status ? ` ${error.status}` : ""}: ${detail}`;
 }
 
-/** The message fields as Mailgun's messages.create takes them. */
-export function mailgunMessage({ from, to, subject, text, html }) {
+/**
+ * The message fields as Mailgun's messages.create takes them.
+ *
+ * `variables` ride along as Mailgun user variables ("v:" fields). Mailgun hands them
+ * back in its webhooks, which is how a bounce report is matched to the send it is about.
+ */
+export function mailgunMessage({ from, to, subject, text, html, variables = {} }) {
   return {
     from,
     to: [to],
@@ -87,6 +92,7 @@ export function mailgunMessage({ from, to, subject, text, html }) {
     "o:tracking": "no",
     "o:tracking-clicks": "no",
     "o:tracking-opens": "no",
+    ...Object.fromEntries(Object.entries(variables).map(([name, value]) => [`v:${name}`, value])),
   };
 }
 
@@ -128,7 +134,7 @@ function isUnauthorisedSandboxRecipient(error) {
  * Send one message. Resolves either way, to { sent, recipientNotAllowed }; the second
  * is true only when the provider refused this particular address outright.
  */
-async function deliver({ to, subject, text, html }) {
+async function deliver({ to, subject, text, html, variables }) {
   if (!env.email.enabled) return { sent: false, recipientNotAllowed: false };
 
   try {
@@ -136,7 +142,7 @@ async function deliver({ to, subject, text, html }) {
     if (mailgun) {
       await mailgun.messages.create(
         env.email.mailgun.domain,
-        mailgunMessage({ from: env.email.from, to, subject, text, html })
+        mailgunMessage({ from: env.email.from, to, subject, text, html, variables })
       );
     } else {
       await getTransport().sendMail({ from: env.email.from, to, subject, text, html });
@@ -243,9 +249,20 @@ If you did not create a BioAudit account, you can ignore this email. Nobody can 
 /**
  * Unlike the notifications, the caller needs to know why a code did not go, so it can
  * tell the student something they can act on. Resolves to { sent, recipientNotAllowed }.
+ * `variables` reach Mailgun's webhooks (see mailgunMessage); SMTP has nowhere to put them.
  */
-export function sendStudentVerificationCode({ to, code, expiresInMinutes, universityName }) {
-  return deliver({ to, ...studentVerificationEmail({ code, expiresInMinutes, universityName }) });
+export function sendStudentVerificationCode({
+  to,
+  code,
+  expiresInMinutes,
+  universityName,
+  variables,
+}) {
+  return deliver({
+    to,
+    ...studentVerificationEmail({ code, expiresInMinutes, universityName }),
+    variables,
+  });
 }
 
 export function sendPasswordChanged({ to }) {

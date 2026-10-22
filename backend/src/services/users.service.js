@@ -33,6 +33,9 @@ export async function getProfile(uid) {
  *
  * If writing the profile fails we delete the auth user again, so a half-created
  * account cannot exist in a state where the person can sign in but has no record.
+ *
+ * `studentVerified` is for a student whose address was proved with a sign-up code
+ * before calling this (see POST /auth/register), so the account starts out verified.
  */
 export async function createAccount({
   email,
@@ -41,10 +44,16 @@ export async function createAccount({
   role = ROLES.MEMBER,
   organisationId = null,
   universityId = null,
+  studentVerified = false,
 }) {
   let userRecord;
   try {
-    userRecord = await auth.createUser({ email, password, displayName });
+    userRecord = await auth.createUser({
+      email,
+      password,
+      displayName,
+      emailVerified: studentVerified,
+    });
   } catch (error) {
     if (error.code === "auth/email-already-exists") {
       throw ApiError.conflict("An account already exists for that email address.");
@@ -61,12 +70,19 @@ export async function createAccount({
     role,
     organisationId,
     disabled: false,
-    studentVerification: {
-      status: STUDENT_STATUS.UNVERIFIED,
-      email: null,
-      verifiedAt: null,
-      universityId,
-    },
+    studentVerification: studentVerified
+      ? {
+          status: STUDENT_STATUS.VERIFIED,
+          email,
+          verifiedAt: FieldValue.serverTimestamp(),
+          universityId,
+        }
+      : {
+          status: STUDENT_STATUS.UNVERIFIED,
+          email: null,
+          verifiedAt: null,
+          universityId,
+        },
     scanCount: 0,
     createdAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),

@@ -176,6 +176,9 @@ export const env = {
       domain: optional("MAILGUN_DOMAIN"),
       // Only an EU-region domain needs this: https://api.eu.mailgun.net
       url: optional("MAILGUN_URL", "https://api.mailgun.net"),
+      // Proves a bounce report really came from Mailgun (POST /api/webhooks/mailgun).
+      // Without it bounces are not tracked, and students are not told about them.
+      webhookSigningKey: optional("MAILGUN_WEBHOOK_SIGNING_KEY"),
     },
     host: optional("SMTP_HOST"),
     port: int("SMTP_PORT", 587),
