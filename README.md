@@ -43,7 +43,7 @@ a **standalone Windows `.exe`** — all driving the same detection engine.
 | Behavioural error-oracle | `analysis/error_oracle.py` | M3 |
 | Lockout / attempt-counter oracle | `analysis/lockout.py` | M3 |
 | Statistical baseline + outlier detection (no ML) | `analysis/statistics.py` | — |
-| AI explanation + mitigation (grounded, redacted) — server-side only | `backend/src/services/gemini.service.js` | — |
+| AI explanation + mitigation (grounded, redacted) — server-side only | `backend/src/services/aiGraph.service.js` | — |
 | Severity ranking + recommendation engine | `engine/` | — |
 | Desktop GUI (scan / assess / history / accounts) | `gui/` | — |
 | Backend: accounts, history, team oversight (required — see below) | `backend/`, `api/` | — |
@@ -69,7 +69,7 @@ pip install -r requirements.txt
 The deterministic core degrades gracefully: heavy dependencies (androguard, PySide6,
 weasyprint, …) import lazily, so the rule-based engine runs even with none of them
 installed. `scan-apk` needs androguard; the desktop app needs `PySide6`. Nothing here
-needs a Gemini key — AI explanation runs entirely on the backend (see
+needs an AI provider key — AI explanation runs entirely on the backend (see
 [Accounts and shared history](#accounts-and-shared-history)), not on your machine.
 
 ---

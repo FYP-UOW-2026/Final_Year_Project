@@ -106,9 +106,14 @@ export const requireVerifiedStudent = asyncHandler(async (req, res, next) => {
  * team's assessments, and giving it scanning powers of its own would put the supervisor
  * inside the set of people being supervised. Someone who needs to do both keeps a
  * separate personal account, which is how admin accounts were always meant to work.
+ *
+ * The one exception is a solo organisation (a freelancer's one-person team) while it still
+ * has a single member: there is nobody else to supervise, so the owner may scan. Once a
+ * second person joins, the exception ends and the usual separation applies.
  */
 export const denyAdmin = asyncHandler(async (req, res, next) => {
   if (req.user.role === ROLES.ADMIN) {
+    if (await isSoloOrganisation(req.user.organisationId)) return next();
     throw ApiError.forbidden(
       "Admin accounts oversee a team's assessments rather than running their own. " +
         "Use a personal account to scan an app."
@@ -116,6 +121,13 @@ export const denyAdmin = asyncHandler(async (req, res, next) => {
   }
   next();
 });
+
+async function isSoloOrganisation(organisationId) {
+  if (!organisationId) return false;
+  const snap = await db.collection(COLLECTIONS.ORGANISATIONS).doc(organisationId).get();
+  const org = snap.exists ? snap.data() : null;
+  return Boolean(org?.solo) && (org.memberIds?.length ?? 0) <= 1;
+}
 
 /** Gate for organisation admin features. */
 export const requireAdmin = asyncHandler(async (req, res, next) => {

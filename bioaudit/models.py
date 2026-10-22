@@ -45,6 +45,18 @@ OWASP = {
     "M10": "Insufficient Cryptography",
 }
 
+# Category-level cross-reference from the Mobile Top 10 entries above to OWASP MASVS v2
+# control groups. Coarse on purpose: it tags a finding for clients who report against
+# MASVS, it does not claim per-control coverage.
+MASVS = {
+    "M1": ["MASVS-AUTH", "MASVS-STORAGE"],
+    "M3": ["MASVS-AUTH"],
+    "M6": ["MASVS-PRIVACY"],
+    "M8": ["MASVS-PLATFORM", "MASVS-RESILIENCE"],
+    "M9": ["MASVS-STORAGE"],
+    "M10": ["MASVS-CRYPTO"],
+}
+
 
 @dataclass
 class Finding:
@@ -72,9 +84,15 @@ class Finding:
 
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
 
+    @property
+    def masvs(self) -> list[str]:
+        """MASVS v2 groups derived from `owasp`, de-duplicated, order preserved."""
+        return list(dict.fromkeys(g for m in self.owasp for g in MASVS.get(m, [])))
+
     def to_dict(self) -> dict:
         d = self.__dict__.copy()
         d["severity"] = self.severity.label
+        d["masvs"] = self.masvs
         return d
 
 

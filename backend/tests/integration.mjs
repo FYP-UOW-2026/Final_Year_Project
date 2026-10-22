@@ -65,6 +65,10 @@ function group(title) {
 
 /** Thin request helper that returns status and parsed body together. */
 async function call(method, path, { token, body } = {}) {
+  // Every signup must accept the Terms; tests opt out by passing tosAccepted explicitly.
+  if (path.startsWith("/auth/register") && body && !("tosAccepted" in body)) {
+    body = { ...body, tosAccepted: true };
+  }
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: {
@@ -202,6 +206,20 @@ await check("the chosen university is kept on the new account", async () => {
   assert.equal(status, 201, JSON.stringify(body));
   assert.equal(body.user.studentVerification.university.id, "oxford");
   assert.equal(body.user.studentVerification.status, "verified");
+});
+
+await check("registering without accepting the Terms is rejected", async () => {
+  const { status, body } = await call("POST", "/auth/register", {
+    body: { email: `notos-${unique()}@example.com`, password: userPassword, tosAccepted: false },
+  });
+  assert.equal(status, 400, JSON.stringify(body));
+  assert.match(JSON.stringify(body), /Terms of Use/i);
+});
+
+await check("the accepted Terms version is stored on the profile", async () => {
+  const { status, body } = await call("GET", "/users/me", { token: userToken });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.match(body.user.tosVersion, /^\d{4}-\d{2}$/);
 });
 
 await check("the same email cannot register twice", async () => {
@@ -571,6 +589,22 @@ await check("a scan is stored with its severity counts worked out", async () => 
   firstScanId = body.scan.id;
 });
 
+await check("a per-scan authorisation record is stored on the scan", async () => {
+  const authorisation = {
+    client: "Acme Bank",
+    target: "com.example.app",
+    statement: "Written permission from the app owner",
+    at: new Date().toISOString(),
+  };
+  const created = await call("POST", "/scans", {
+    token: userToken,
+    body: { ...scanPayload("com.example.app"), authorisation },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const stored = (await db.collection("scans").doc(created.body.scan.id).get()).data();
+  assert.equal(stored.authorisation.client, "Acme Bank");
+});
+
 await check("a device assessment without an authorisation confirmation is refused", async () => {
   const { status, body } = await call("POST", "/scans", {
     token: userToken,
@@ -613,6 +647,11 @@ await check("a student account trims the oldest scan once past its limit", async
   assert.equal(gone.status, 404, "the oldest scan should have been removed");
 });
 
+await check("trimming takes the removed scans off the scan count", async () => {
+  const profile = await db.collection(COLLECTIONS.USERS).doc(userUid).get();
+  assert.equal(profile.data().scanCount, 3, "scanCount should match the 3 scans kept");
+});
+
 await check("comparing scans is refused on a student account", async () => {
   const { body: list } = await call("GET", "/scans", { token: userToken });
   const [a, b] = list.scans;
@@ -631,6 +670,26 @@ await check("exporting a report is refused on a student account", async () => {
 await check("there is no subscription to buy or cancel", async () => {
   const upgrade = await call("POST", "/subscription/upgrade", { token: userToken, body: {} });
   assert.equal(upgrade.status, 404, "the upgrade endpoint should be gone");
+});
+
+await check("clearing the whole history removes every report export too", async () => {
+  await db.collection(COLLECTIONS.REPORTS).add({
+    userId: userUid,
+    scanId: "some-scan",
+    format: "html",
+    html: "<p>planted</p>",
+  });
+
+  const { status, body } = await call("DELETE", "/scans", {
+    token: userToken,
+    body: { confirm: "DELETE_ALL" },
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+
+  const exports = await db.collection(COLLECTIONS.REPORTS).where("userId", "==", userUid).get();
+  assert.equal(exports.size, 0, "no export should outlive a cleared history");
+  const profile = await db.collection(COLLECTIONS.USERS).doc(userUid).get();
+  assert.equal(profile.data().scanCount, 0);
 });
 
 // --- organisations and admin ---------------------------------------------
@@ -732,6 +791,41 @@ await check("the same invitation token cannot be used twice", async () => {
   });
   assert.equal(status, 409, "a redeemed invitation should be refused");
   assert.equal(await accountExists(email), false, "no account should be left behind");
+});
+
+await check("a solo organisation's owner can scan until a second person joins", async () => {
+  const soloEmail = `solo-${unique()}@example.com`;
+  const reg = await call("POST", "/auth/register-admin", {
+    body: { email: soloEmail, password: "solo-password-1", organisationName: "One Person Ltd", solo: true },
+  });
+  assert.equal(reg.status, 201, JSON.stringify(reg.body));
+  const soloToken = reg.body.session.idToken;
+  const soloOrg = reg.body.organisation.id;
+
+  const first = await call("POST", "/scans", { token: soloToken, body: minimalScan });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+
+  const inv = await call("POST", `/organisations/${soloOrg}/invitations`, {
+    token: soloToken,
+    body: { email: `partner-${unique()}@example.com` },
+  });
+  assert.equal(inv.status, 201, JSON.stringify(inv.body));
+  // Registering with the invitation joins the team in the same step.
+  const partner = await call("POST", "/auth/register", {
+    body: {
+      email: `partner2-${unique()}@example.com`,
+      password: "partner-password-1",
+      invitationToken: inv.body.token,
+    },
+  });
+  assert.equal(partner.status, 201, JSON.stringify(partner.body));
+  assert.equal(partner.body.organisation.id, soloOrg);
+
+  const relogin = await call("POST", "/auth/login", {
+    body: { email: soloEmail, password: "solo-password-1" },
+  });
+  const after = await call("POST", "/scans", { token: relogin.body.session.idToken, body: minimalScan });
+  assert.equal(after.status, 403, "owner must stop scanning once the team has a second member");
 });
 
 await check("an admin can list the members of their own organisation", async () => {
@@ -945,6 +1039,11 @@ await check("an admin can promote a member to admin", async () => {
   assert.equal(snap.data().role, "admin");
 });
 
+await check("an admin can open a current member's scan", async () => {
+  const { status, body } = await call("GET", `/scans/${memberScanId}`, { token: adminToken });
+  assert.equal(status, 200, JSON.stringify(body));
+});
+
 await check("removing a member leaves their account and scans intact", async () => {
   const { status } = await call("DELETE", `/organisations/${orgId}/members/${memberUid}`, {
     token: adminToken,
@@ -961,6 +1060,22 @@ await check("removing a member leaves their account and scans intact", async () 
 
   const opened = await call("GET", `/scans/${memberScanId}`, { token: adminToken });
   assert.equal(opened.status, 403, "a removed member's runs are no longer the admin's to read");
+});
+
+await check("after removal the admin can no longer read or flag that person's scans", async () => {
+  // Even a scan that still carries this organisation's id, which used to be enough on its
+  // own. Stamped here because an earlier test unstamps this run to stand in for one saved
+  // before joining.
+  await db.collection(COLLECTIONS.SCANS).doc(memberScanId).update({ organisationId: orgId });
+
+  const read = await call("GET", `/scans/${memberScanId}`, { token: adminToken });
+  assert.equal(read.status, 403, "a removed member's scan must not be readable");
+
+  const flag = await call("POST", `/organisations/${orgId}/scans/${memberScanId}/flag`, {
+    token: adminToken,
+    body: { reason: "Should not be possible after removal" },
+  });
+  assert.equal(flag.status, 403, "a removed member's scan must not be flaggable");
 });
 
 await check("an admin cannot remove themselves", async () => {
@@ -1014,7 +1129,17 @@ await check("deleting your own account removes your scan history with it", async
   const token = registered.body.session.idToken;
   const uid = registered.body.user.id;
 
-  await call("POST", "/scans", { token, body: scanPayload("com.throwaway.app", [sampleFinding]) });
+  const saved = await call("POST", "/scans", {
+    token,
+    body: scanPayload("com.throwaway.app", [sampleFinding]),
+  });
+  // A free account cannot export, so the export is planted directly.
+  await db.collection(COLLECTIONS.REPORTS).add({
+    userId: uid,
+    scanId: saved.body.scan.id,
+    format: "html",
+    html: "<p>planted</p>",
+  });
 
   const before = await db.collection("scans").where("userId", "==", uid).get();
   assert.ok(before.size >= 1, "expected a scan to exist before deletion");
@@ -1027,6 +1152,9 @@ await check("deleting your own account removes your scan history with it", async
 
   const after = await db.collection("scans").where("userId", "==", uid).get();
   assert.equal(after.size, 0, "their scans should have been deleted too");
+
+  const exports = await db.collection(COLLECTIONS.REPORTS).where("userId", "==", uid).get();
+  assert.equal(exports.size, 0, "their report exports should have been deleted too");
 
   const code = await db.collection("studentVerifications").doc(uid).get();
   assert.ok(!code.exists);
