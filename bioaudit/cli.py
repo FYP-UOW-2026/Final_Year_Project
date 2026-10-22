@@ -300,7 +300,8 @@ jobs:
           PYTHONPATH: .bioaudit
           QT_QPA_PLATFORM: offscreen
         run: >
-          python -m bioaudit scan-apk "{apk}" --offline --no-report --fail-on {fail_on}
+          python -m bioaudit scan-apk "{apk}" --offline --no-report
+          --format markdown --output "$GITHUB_STEP_SUMMARY" --fail-on {fail_on}
 """
 
 
@@ -494,7 +495,7 @@ def _print_findings(run: TestRun, file=None) -> None:
 
 
 def _add_ci_flags(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--format", choices=["json", "sarif"],
+    parser.add_argument("--format", choices=["json", "sarif", "markdown"],
                         help="also emit the run in a machine-readable format")
     parser.add_argument("--output", help="write --format output to this file, not stdout")
     parser.add_argument("--fail-on", choices=export.FAIL_ON_CHOICES,
