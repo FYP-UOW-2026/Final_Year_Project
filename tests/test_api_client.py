@@ -25,10 +25,11 @@ import random
 import string
 import urllib.error
 import urllib.request
+from typing import Optional
 
 import pytest
 
-from bioaudit.api import ApiClient, ApiClientError
+from bioaudit.api import Account, ApiClient, ApiClientError
 from bioaudit.models import Finding, Severity, TestRun
 
 # Overridable so the suite can run while another backend already holds port 4000.
@@ -62,31 +63,47 @@ def client() -> ApiClient:
     return ApiClient(BASE_URL)
 
 
-def _verify_student(client: ApiClient) -> None:
-    """Complete student verification without an inbox.
+KNOWN_CODE = "135790"
+
+
+def _plant_code(collection: str, doc_id: str, key: str) -> None:
+    """Make KNOWN_CODE the right answer to a code the server has just emailed.
 
     The real code only leaves the server by email, so this overwrites the stored hash
     with one for a known code, straight in the Firestore emulator (which accepts the
-    "owner" token from anyone), then enters that code the way a user would.
+    "owner" token from anyone). `key` is what the server hashes the code with: the uid
+    for an account's code, the address for a sign-up code.
     """
-    uid = client.account.id
-    code = "135790"
     doc = (f"http://{FIRESTORE_EMULATOR}/v1/projects/{EMULATOR_PROJECT}/databases/(default)"
-           f"/documents/studentVerifications/{uid}?updateMask.fieldPaths=codeHash")
+           f"/documents/{collection}/{doc_id}?updateMask.fieldPaths=codeHash")
     body = {"fields": {"codeHash": {
-        "stringValue": hashlib.sha256(f"{uid}:{code}".encode()).hexdigest()}}}
+        "stringValue": hashlib.sha256(f"{key}:{KNOWN_CODE}".encode()).hexdigest()}}}
     request = urllib.request.Request(
         doc, data=json.dumps(body).encode(), method="PATCH",
         headers={"Content-Type": "application/json", "Authorization": "Bearer owner"})
     urllib.request.urlopen(request, timeout=5).close()
-    client.verify_student_code(code)
+
+
+def _register_student(client: ApiClient, email: str, display_name: Optional[str] = None,
+                      university_id: Optional[str] = None) -> Account:
+    """Sign up as a student without an inbox, entering the code as a user would."""
+    client.send_signup_code(email, university_id)
+    _plant_code("signupVerifications", hashlib.sha256(email.encode()).hexdigest(), email)
+    return client.register(email, "pytest-password-1", display_name,
+                           university_id=university_id, code=KNOWN_CODE)
+
+
+def _verify_student(client: ApiClient) -> None:
+    """Enter the code sent to a signed-in student's new address."""
+    uid = client.account.id
+    _plant_code("studentVerifications", uid, uid)
+    client.verify_student_code(KNOWN_CODE)
 
 
 @pytest.fixture
 def signed_in(client: ApiClient) -> ApiClient:
     """A student account that can scan, which means a verified student."""
-    client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1", "Pytest User")
-    _verify_student(client)
+    _register_student(client, f"pytest-{_unique()}@example.ac.uk", "Pytest User")
     return client
 
 
@@ -119,21 +136,46 @@ def test_health_reports_status(client: ApiClient):
 
 
 def test_register_then_read_profile(client: ApiClient):
-    email = f"pytest-{_unique()}@example.com"
-    account = client.register(email, "pytest-password-1", "Pytest User")
+    email = f"pytest-{_unique()}@example.ac.uk"
+    account = _register_student(client, email, "Pytest User")
 
     assert account.email == email
     assert account.tier == "student"
     assert not account.is_team
+    assert not account.needs_student_verification
     assert client.signed_in
 
     fetched = client.get_profile()
     assert fetched.display_name == "Pytest User"
 
 
+def test_student_cannot_register_without_a_code(client: ApiClient):
+    with pytest.raises(ApiClientError) as exc:
+        client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1")
+    assert exc.value.status == 400
+    assert not client.signed_in
+
+
+def test_a_fresh_signup_code_has_not_bounced(client: ApiClient):
+    email = f"pytest-{_unique()}@example.ac.uk"
+    sent = client.send_signup_code(email)
+    assert client.signup_code_status(email, sent["sendId"]) == {"status": "sent"}
+
+    with pytest.raises(ApiClientError) as exc:
+        client.signup_code_status(email, "0" * 32)
+    assert exc.value.status == 404
+
+
+def test_signup_code_needs_a_university_address(client: ApiClient):
+    with pytest.raises(ApiClientError) as exc:
+        client.send_signup_code(f"pytest-{_unique()}@example.com")
+    assert exc.value.status == 400
+    assert "students" in exc.value.message
+
+
 def test_login_with_wrong_password_is_refused(client: ApiClient):
-    email = f"pytest-{_unique()}@example.com"
-    client.register(email, "pytest-password-1")
+    email = f"pytest-{_unique()}@example.ac.uk"
+    _register_student(client, email)
     client.logout()
 
     with pytest.raises(ApiClientError) as exc:
@@ -143,8 +185,8 @@ def test_login_with_wrong_password_is_refused(client: ApiClient):
 
 def test_unknown_email_and_wrong_password_look_identical(client: ApiClient):
     """The API must not reveal which accounts exist. See the backend's auth service."""
-    email = f"pytest-{_unique()}@example.com"
-    client.register(email, "pytest-password-1")
+    email = f"pytest-{_unique()}@example.ac.uk"
+    _register_student(client, email)
     client.logout()
 
     with pytest.raises(ApiClientError) as wrong_password:
@@ -163,14 +205,20 @@ def test_universities_are_listed(client: ApiClient):
 
 def test_registering_needs_an_email_from_the_chosen_university(client: ApiClient):
     with pytest.raises(ApiClientError) as exc:
-        client.register(f"pytest-{_unique()}@example.com", "pytest-password-1",
-                        university_id="oxford")
+        client.send_signup_code(f"pytest-{_unique()}@example.com", "oxford")
     assert exc.value.status == 400
     assert "@ox.ac.uk" in exc.value.message
 
+    account = _register_student(client, f"pytest-{_unique()}@ox.ac.uk", university_id="oxford")
+    assert account.student_verification["university"]["id"] == "oxford"
 
-def test_unverified_student_cannot_upload(client: ApiClient):
-    account = client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1")
+
+def test_student_who_changes_email_must_verify_again(client: ApiClient):
+    _register_student(client, f"pytest-{_unique()}@example.ac.uk")
+    new_email = f"pytest-{_unique()}@example.ac.uk"
+    client.change_email(new_email, "pytest-password-1")
+    # Firebase ends every session when an account's email changes, so sign in again.
+    account = client.login(new_email, "pytest-password-1")
     assert account.needs_student_verification
     with pytest.raises(ApiClientError) as exc:
         client.upload_run(_sample_run(), authorised=True)
@@ -234,10 +282,9 @@ def test_team_member_can_compare_and_export(client: ApiClient):
     invitation = client.invite_member(organisation["id"], member_email)
 
     member = ApiClient(BASE_URL)
-    member.register(member_email, "pytest-password-1")
-    member.join_organisation(invitation["token"])
-    # Joining revokes the session so the new permissions take effect.
-    account = member.login(member_email, "pytest-password-1")
+    account = member.register(member_email, "pytest-password-1",
+                              invitation_token=invitation["token"])
+    # Registering with an invitation joins the team in the same step.
     assert account.is_team
     assert account.tier == "team"
 
@@ -279,14 +326,13 @@ def test_admin_can_invite_and_manage_a_member(client: ApiClient):
     assert invitation["token"], "the one-time token should be returned"
 
     member = ApiClient(BASE_URL)
-    member.register(member_email, "pytest-password-1", "Member")
-    member.join_organisation(invitation["token"])
+    member.register(member_email, "pytest-password-1", "Member",
+                    invitation_token=invitation["token"])
 
     members = client.list_members(org_id)
     assert member_email in {m["email"] for m in members}
 
     # A member must not reach the admin endpoints.
-    member.login(member_email, "pytest-password-1")
     with pytest.raises(ApiClientError) as exc:
         member.list_members(org_id)
     assert exc.value.status == 403
@@ -304,9 +350,8 @@ def test_admin_cannot_see_member_findings(client: ApiClient):
     invitation = client.invite_member(org_id, member_email)
 
     member = ApiClient(BASE_URL)
-    member_account = member.register(member_email, "pytest-password-1")
-    member.join_organisation(invitation["token"])
-    member.login(member_email, "pytest-password-1")
+    member_account = member.register(member_email, "pytest-password-1",
+                                     invitation_token=invitation["token"])
     member.upload_run(_sample_run("com.member.private"), authorised=True)
 
     scans = client.member_scans(org_id, member_account.id)

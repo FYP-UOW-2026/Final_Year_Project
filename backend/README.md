@@ -151,12 +151,15 @@ All paths are prefixed with `/api`. Every endpoint except registration, login, a
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | Service status, and whether AI explanations are configured |
+| POST | `/webhooks/mailgun` | Mailgun's bounce reports for verification codes (signed; see Student verification) |
 
 ### Authentication
 
 | Method | Path | Diagram function |
 |---|---|---|
-| POST | `/auth/register` | Unregistered: Register user account |
+| POST | `/auth/register/send-code` | Unregistered: email the code a student signs up with |
+| POST | `/auth/register/code-status` | Unregistered: whether that code bounced |
+| POST | `/auth/register` | Unregistered: Register user account (a student with that code, or an invitee with their invitation token) |
 | POST | `/auth/register-admin` | Admin: Register admin account (also creates the organisation) |
 | POST | `/auth/login` | User: Log in |
 | POST | `/auth/refresh` | Keep a session alive |
@@ -178,14 +181,56 @@ All paths are prefixed with `/api`. Every endpoint except registration, login, a
 Changing an email address or password requires the current password as well as a valid session,
 since a stolen token alone should not be enough to take an account over.
 
-**Student verification.** Personal accounts are for students. A student account (not an admin,
-not in an organisation) must verify a university email before it can save a scan
-or request an AI explanation; viewing and deleting existing history stays open. `.ac.uk`, `.edu`,
-`.edu.xx` and `.ac.xx` domains are accepted, plus any listed in `STUDENT_EMAIL_DOMAINS`. A
-six-digit code is emailed on registration and on changing to a university address. It expires
-after 15 minutes, allows 5 attempts, and can be re-sent once a minute. Students pick their university
-from a searchable list (`GET /universities`, defined in `src/data/universities.js`), and the email must
-be one that university issues; "my university isn't listed" falls back to the domain check above.
+**Student verification.** Personal accounts are for students, and a student has to verify their
+university email **before** the account is created. `.ac.uk`, `.edu`, `.edu.xx` and `.ac.xx` domains
+are accepted, plus any listed in `STUDENT_EMAIL_DOMAINS`. Students pick their university from a
+searchable list (`GET /universities`, defined in `src/data/universities.js`), and the email must be one
+that university issues; "my university isn't listed" falls back to the domain check above. Signing up
+is two calls:
+
+1. `POST /auth/register/send-code` with `{ email, universityId? }` emails a six-digit code. It is
+   refused for a non-university address, an address outside the chosen university, one that
+   already has an account, or one whose domain does not receive mail according to DNS (MX
+   records, or the domain's own address if it has none). That last check catches typos such as
+   `ox.ac.ku`. It cannot tell whether the mailbox itself exists, which is why the code is still
+   what proves the address, and why the success message repeats the address for the student to
+   check. A DNS outage on the server's side skips the check rather than blocking sign-ups, and it
+   only runs when email is actually being sent. The reply carries a `sendId` for the next call.
+2. While the student waits, `POST /auth/register/code-status` with `{ email, sendId }` says whether
+   the code bounced: `{ status: "sent" }`, or `{ status: "bounced", message }` once the university's
+   mail server has refused the address, which is how a mailbox that does not exist shows up.
+   Clients ask every 5 seconds for 2 minutes, and only after a send that reported
+   `delivered: true`. It answers only to the `sendId` holder, so it cannot be used to check which
+   mailboxes exist.
+3. `POST /auth/register` with `{ email, password, displayName?, universityId?, code }` creates the
+   account already verified and returns `{ user, session }`. Without a right code nothing is created.
+
+**Bounces** are reported by Mailgun to `POST /webhooks/mailgun`. Each code email carries its code
+document and a random `sendId` as Mailgun variables, and a report only marks that exact send, and
+only if its signature checks out against `MAILGUN_WEBHOOK_SIGNING_KEY`. To turn it on, add a
+**Permanent failure** webhook in the Mailgun dashboard (Sending → Webhooks) pointing at
+`https://<api>/api/webhooks/mailgun`, and copy the dashboard's HTTP webhook signing key into the
+server's environment. Without that, every code reads as `sent`. Mailgun also stops sending to an
+address once it has bounced; if a real student's address bounced by mistake (say, before their
+university mailbox was set up), remove it under Suppressions → Bounces.
+
+The other way to get a personal account is an invitation: `POST /auth/register` with
+`{ email, password, displayName?, invitationToken }` creates the account and joins the team in one
+step, at any address, since the team sponsors it. A bad token creates nothing.
+
+Changing a student's email lapses the verification. Until the new address is verified (a code is
+emailed to it straight away; `/users/me/student-verification/*` re-sends and checks it), the account
+cannot save a scan or request an AI explanation, though viewing and deleting existing history stays
+open. Every code expires after 15 minutes, allows 5 attempts, and can be re-sent once a minute.
+
+**The website signs students up through the API too.** `firestore.rules` no longer lets a client
+create a `users` document with `requestedPlan: 'student'`; only an organisation sign-up may still be
+written directly. The website's student form should call the endpoints above (its origin must be
+listed in `CORS_ORIGINS`), then sign in with the Firebase client SDK using the same email and
+password if it needs a browser session. Like the desktop app, it should ask for the email address
+twice and refuse to send a code until both match, since a typo sends the code to someone else's
+inbox, or to none. Deploy the rules change with
+`firebase deploy --only firestore:rules`.
 
 Codes are emailed through Mailgun (`MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `MAILGUN_FROM`), or any SMTP
 server as a fallback; see `.env.example`, and check the settings with `npm run email:test -- you@x.com`.
@@ -267,6 +312,8 @@ scans/{id}                  userId, organisationId, type, target, findings[],
                             counts, flagged, authorisationConfirmed
 flags/{id}                  scanId, organisationId, subjectId, reason, status, review
 auditLog/{id}               action, actorId, subjectId, organisationId, metadata, at
+studentVerifications/{uid}  email, codeHash, attempts, sentAt, expiresAt
+signupVerifications/{hash}  the same, keyed by a SHA-256 of the address (no account yet)
 ```
 
 Invitation tokens are stored **hashed**, so a copy of the database does not hand out working

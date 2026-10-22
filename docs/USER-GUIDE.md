@@ -49,8 +49,8 @@ The first thing you see is a welcome screen with three tabs:
 
 | Tab | Use it when |
 |---|---|
-| **Create account** | You are new. Email + password is all you need. |
-| **Join with an invite** | An admin sent you an invitation token for their team. |
+| **Create account** | You are new. As a student, pick your university, enter your university email twice and a password, then press **Send code** and type in the six-digit code we email you. Your account is created once the code checks out. If the address turns out not to exist, the form tells you within a minute or two, so fix it and press **Send again**. Setting up a team instead? Choose **I'm setting up a team**. |
+| **Join with an invite** | An admin sent you an invitation token for their team. Any email address works here. |
 | **Sign in** | You already have an account. |
 
 Tick **"Keep me signed in on this computer"** to skip this next time. It is off by

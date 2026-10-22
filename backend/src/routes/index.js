@@ -7,6 +7,7 @@ import authRoutes from "./auth.routes.js";
 import organisationRoutes from "./organisations.routes.js";
 import scanRoutes from "./scans.routes.js";
 import userRoutes from "./users.routes.js";
+import webhookRoutes from "./webhooks.routes.js";
 
 const router = Router();
 
@@ -43,6 +44,7 @@ router.use("/auth", authRoutes);
 router.use("/users", userRoutes);
 router.use("/scans", scanRoutes);
 router.use("/organisations", organisationRoutes);
+router.use("/webhooks", webhookRoutes);
 
 export default router;
 

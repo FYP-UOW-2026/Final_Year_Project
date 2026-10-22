@@ -9,6 +9,7 @@
  * That script starts the emulators, runs this file, and shuts them down again.
  */
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 
 const EMULATOR_PROJECT = "bioaudit-test";
 
@@ -24,13 +25,17 @@ process.env.FIREBASE_AUTH_EMULATOR_HOST = process.env.FIREBASE_AUTH_EMULATOR_HOS
 process.env.FIREBASE_WEB_API_KEY = "emulator-key";
 process.env.GROQ_API_KEY = "";
 process.env.FREE_HISTORY_LIMIT = "3"; // small, so retention is quick to prove
-// Every test registers and signs in from the same address, so the production auth
-// limit would start refusing partway through the run.
+// Every test registers and signs in from the same address, so the production limits
+// would start refusing partway through the run.
 process.env.AUTH_RATE_LIMIT_PER_15MIN = "1000";
+process.env.API_RATE_LIMIT_PER_MINUTE = "100000";
+// Lets the tests sign Mailgun bounce reports the way Mailgun would.
+const WEBHOOK_KEY = "integration-webhook-signing-key";
+process.env.MAILGUN_WEBHOOK_SIGNING_KEY = WEBHOOK_KEY;
 
 const { createApp } = await import("../src/app.js");
 const { db, auth } = await import("../src/config/firebase.js");
-const { hashCode } = await import("../src/services/studentVerification.service.js");
+const { hashCode, signupCodeId } = await import("../src/services/studentVerification.service.js");
 const { COLLECTIONS } = await import("../src/constants/index.js");
 
 const app = createApp();
@@ -95,6 +100,36 @@ await clearEmulator();
 
 const unique = () => Math.random().toString(36).slice(2, 8);
 
+/**
+ * The real code only ever leaves the server by email, so the tests swap a known code's
+ * hash into the stored record, which is what the emailed code would have matched.
+ */
+const KNOWN_CODE = "246810";
+
+async function plantSignupCode(email) {
+  await db
+    .collection("signupVerifications")
+    .doc(signupCodeId(email))
+    .update({ codeHash: hashCode(email, KNOWN_CODE) });
+}
+
+/** Register a student the way a person does: ask for a code, then sign up with it. */
+async function registerStudent(body) {
+  const sent = await call("POST", "/auth/register/send-code", {
+    body: { email: body.email, universityId: body.universityId },
+  });
+  assert.equal(sent.status, 200, JSON.stringify(sent.body));
+  await plantSignupCode(body.email);
+  return call("POST", "/auth/register", { body: { ...body, code: KNOWN_CODE } });
+}
+
+async function accountExists(email) {
+  return auth.getUserByEmail(email).then(
+    () => true,
+    () => false
+  );
+}
+
 // --- registration and sign-in ---------------------------------------------
 
 group("Registration and sign-in");
@@ -105,29 +140,227 @@ const userPassword = "correct-horse-battery";
 let userToken;
 let userUid;
 
-await check("registering creates the account and returns a usable session", async () => {
+await check("a student cannot register without a code for their email", async () => {
   const { status, body } = await call("POST", "/auth/register", {
-    body: { email: userEmail, password: userPassword, displayName: "Test Dev" },
+    body: { email: userEmail, password: userPassword },
+  });
+  assert.equal(status, 400);
+  assert.match(body.error.message, /verify your university email/i);
+  assert.equal(await accountExists(userEmail), false, "no account should have been made");
+});
+
+await check("a sign-up code is only sent to a university address", async () => {
+  const email = `hobbyist-${unique()}@example.com`;
+  const sent = await call("POST", "/auth/register/send-code", { body: { email } });
+  assert.equal(sent.status, 400);
+  assert.match(sent.body.error.message, /personal accounts are for students/i);
+
+  const registered = await call("POST", "/auth/register", {
+    body: { email, password: "hobbyist-password-1", code: KNOWN_CODE },
+  });
+  assert.equal(registered.status, 400);
+  assert.equal(await accountExists(email), false);
+});
+
+await check("a sign-up code is only sent to an address at the chosen university", async () => {
+  const { status, body } = await call("POST", "/auth/register/send-code", {
+    body: { email: `dev-${unique()}@example.ac.uk`, universityId: "oxford" },
+  });
+  assert.equal(status, 400);
+  assert.match(body.error.message, /@ox\.ac\.uk/);
+});
+
+await check("registering with the emailed code creates a verified account and a session", async () => {
+  const { status, body } = await registerStudent({
+    email: userEmail,
+    password: userPassword,
+    displayName: "Test Dev",
   });
   assert.equal(status, 201, JSON.stringify(body));
   assert.equal(body.user.email, userEmail);
   assert.equal(body.user.tier, "student");
   assert.equal(body.user.role, "member");
   assert.ok(body.session.idToken, "expected an idToken");
-  // A code is issued at registration for a student account at a university address.
-  assert.equal(body.user.studentVerification.status, "pending");
+  assert.equal(body.user.studentVerification.status, "verified");
   assert.equal(body.user.studentVerification.required, true);
-  assert.equal(body.user.studentVerification.eligible, true);
   userToken = body.session.idToken;
   userUid = body.user.id;
+
+  const record = await auth.getUser(userUid);
+  assert.equal(record.emailVerified, true);
+  const code = await db.collection("signupVerifications").doc(signupCodeId(userEmail)).get();
+  assert.ok(!code.exists, "a used sign-up code should be deleted");
+});
+
+await check("the chosen university is kept on the new account", async () => {
+  const email = `dev-${unique()}@ox.ac.uk`;
+  const { status, body } = await registerStudent({
+    email,
+    password: "oxford-password-1",
+    universityId: "oxford",
+  });
+  assert.equal(status, 201, JSON.stringify(body));
+  assert.equal(body.user.studentVerification.university.id, "oxford");
+  assert.equal(body.user.studentVerification.status, "verified");
 });
 
 await check("the same email cannot register twice", async () => {
+  const sent = await call("POST", "/auth/register/send-code", { body: { email: userEmail } });
+  assert.equal(sent.status, 409, "no code should be sent for an address with an account");
+
   const { status, body } = await call("POST", "/auth/register", {
-    body: { email: userEmail, password: userPassword },
+    body: { email: userEmail, password: userPassword, code: KNOWN_CODE },
   });
   assert.equal(status, 409);
   assert.match(body.error.message, /already exists/i);
+});
+
+await check("a code sent to one address cannot register another", async () => {
+  const codeHolder = `holder-${unique()}@example.ac.uk`;
+  const other = `other-${unique()}@example.ac.uk`;
+  await call("POST", "/auth/register/send-code", { body: { email: codeHolder } });
+  await plantSignupCode(codeHolder);
+
+  const { status } = await call("POST", "/auth/register", {
+    body: { email: other, password: "other-password-1", code: KNOWN_CODE },
+  });
+  assert.equal(status, 400);
+  assert.equal(await accountExists(other), false);
+});
+
+await check("a sign-up code stops working after too many wrong guesses", async () => {
+  const email = `guesser-${unique()}@uni.ac.uk`;
+  const password = "guesser-password-1";
+  await call("POST", "/auth/register/send-code", { body: { email } });
+  await plantSignupCode(email);
+
+  const wrong = await call("POST", "/auth/register", { body: { email, password, code: "000000" } });
+  assert.equal(wrong.status, 400);
+  const stored = await db.collection("signupVerifications").doc(signupCodeId(email)).get();
+  assert.equal(stored.data().attempts, 1, "a wrong guess should be counted");
+
+  for (let i = 0; i < 4; i += 1) {
+    await call("POST", "/auth/register", { body: { email, password, code: "111111" } });
+  }
+  const { status } = await call("POST", "/auth/register", {
+    body: { email, password, code: KNOWN_CODE },
+  });
+  assert.equal(status, 429, "the right code must not work once the attempts are used up");
+  assert.equal(await accountExists(email), false);
+});
+
+await check("asking for another sign-up code straight away is refused", async () => {
+  const email = `impatient-${unique()}@example.ac.uk`;
+  const first = await call("POST", "/auth/register/send-code", { body: { email } });
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  const again = await call("POST", "/auth/register/send-code", { body: { email } });
+  assert.equal(again.status, 429);
+});
+
+// --- bounced sign-up codes ----------------------------------------------------
+
+group("Bounced sign-up codes");
+
+/** POST a Mailgun webhook signed the way Mailgun signs one. */
+async function mailgunWebhook(eventData, { key = WEBHOOK_KEY } = {}) {
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const token = crypto.randomBytes(25).toString("hex");
+  const signature = crypto.createHmac("sha256", key).update(timestamp + token).digest("hex");
+  return call("POST", "/webhooks/mailgun", {
+    body: { signature: { timestamp, token, signature }, "event-data": eventData },
+  });
+}
+
+/** Mailgun's report that a message to `recipient` permanently failed. */
+function permanentFailure(recipient, variables) {
+  return {
+    event: "failed",
+    severity: "permanent",
+    reason: "bounce",
+    recipient,
+    "delivery-status": { code: 550, description: "5.1.1 Recipient address rejected" },
+    "user-variables": variables,
+  };
+}
+
+/** Ask for a sign-up code, returning what a client needs to follow it up. */
+async function sendSignupCodeTo(email) {
+  const sent = await call("POST", "/auth/register/send-code", { body: { email } });
+  assert.equal(sent.status, 200, JSON.stringify(sent.body));
+  assert.match(sent.body.sendId, /^[a-f0-9]{32}$/);
+  return { sendId: sent.body.sendId, codeDoc: `signupVerifications/${signupCodeId(email)}` };
+}
+
+const codeStatus = (email, sendId) =>
+  call("POST", "/auth/register/code-status", { body: { email, sendId } });
+
+await check("a fresh sign-up code reads as sent", async () => {
+  const email = `fresh-${unique()}@example.ac.uk`;
+  const { sendId } = await sendSignupCodeTo(email);
+  const { status, body } = await codeStatus(email, sendId);
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.status, "sent");
+});
+
+await check("Mailgun's report of a permanent failure marks the code bounced", async () => {
+  const email = `typo-${unique()}@example.ac.uk`;
+  const { sendId, codeDoc } = await sendSignupCodeTo(email);
+
+  const report = await mailgunWebhook(permanentFailure(email, { codeDoc, sendId }));
+  assert.equal(report.status, 200, JSON.stringify(report.body));
+
+  const { body } = await codeStatus(email, sendId);
+  assert.equal(body.status, "bounced");
+  assert.match(body.message, /does not exist/);
+  assert.ok(body.message.includes(email), "the message should name the address");
+});
+
+await check("a report with a bad signature is refused and changes nothing", async () => {
+  const email = `forged-${unique()}@example.ac.uk`;
+  const { sendId, codeDoc } = await sendSignupCodeTo(email);
+
+  const report = await mailgunWebhook(permanentFailure(email, { codeDoc, sendId }), {
+    key: "not-the-signing-key",
+  });
+  assert.equal(report.status, 401);
+  assert.equal((await codeStatus(email, sendId)).body.status, "sent");
+});
+
+await check("a report about an earlier send does not mark a newer code", async () => {
+  const email = `resent-${unique()}@example.ac.uk`;
+  const { sendId, codeDoc } = await sendSignupCodeTo(email);
+  // Stand in for a second send, which replaces the code and its sendId.
+  const newerSendId = crypto.randomBytes(16).toString("hex");
+  await db.doc(codeDoc).update({ sendId: newerSendId });
+
+  await mailgunWebhook(permanentFailure(email, { codeDoc, sendId }));
+  assert.equal((await codeStatus(email, newerSendId)).body.status, "sent");
+});
+
+await check("temporary failures are left alone, since Mailgun retries them", async () => {
+  const email = `greylisted-${unique()}@example.ac.uk`;
+  const { sendId, codeDoc } = await sendSignupCodeTo(email);
+  const event = { ...permanentFailure(email, { codeDoc, sendId }), severity: "temporary" };
+
+  const report = await mailgunWebhook(event);
+  assert.equal(report.status, 200);
+  assert.equal((await codeStatus(email, sendId)).body.status, "sent");
+});
+
+await check("a report cannot be aimed at anything but a code", async () => {
+  const report = await mailgunWebhook(
+    permanentFailure(userEmail, { codeDoc: `users/${userUid}`, sendId: "a".repeat(32) })
+  );
+  assert.equal(report.status, 200);
+  const profile = (await db.collection("users").doc(userUid).get()).data();
+  assert.equal(profile.bounced, undefined, "the user document must be untouched");
+});
+
+await check("asking about a code needs the sendId it was sent with", async () => {
+  const email = `nosy-${unique()}@example.ac.uk`;
+  await sendSignupCodeTo(email);
+  const { status } = await codeStatus(email, "0".repeat(32));
+  assert.equal(status, 404);
 });
 
 await check("signing in with the right password works", async () => {
@@ -187,15 +420,30 @@ await check("changing the password needs the current one", async () => {
 
 // --- student verification -------------------------------------------------
 
-group("Student verification");
+group("Student verification after changing email");
 
-/**
- * The real code only ever leaves the server by email, so the test swaps a known code's
- * hash into the stored record, which is what the emailed code would have matched.
- */
-const KNOWN_CODE = "246810";
+// A student is verified when their account is created, and changing the account's email
+// lapses that. It is the one way an existing account comes to need a code.
+
 async function plantKnownCode(uid) {
   await db.collection("studentVerifications").doc(uid).update({ codeHash: hashCode(uid, KNOWN_CODE) });
+}
+
+/** A verified student who has just moved to `newEmail`, with the session to act as them. */
+async function lapsedStudent(newEmail) {
+  const password = "lapsed-password-1";
+  const reg = await registerStudent({ email: `lapsed-${unique()}@example.ac.uk`, password });
+  assert.equal(reg.status, 201, JSON.stringify(reg.body));
+  const token = reg.body.session.idToken;
+  const moved = await call("POST", "/users/me/email", {
+    token,
+    body: { newEmail, currentPassword: password },
+  });
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+  // Firebase ends every session when an account's email changes, so sign in again.
+  const relogin = await call("POST", "/auth/login", { body: { email: newEmail, password } });
+  assert.equal(relogin.status, 200, JSON.stringify(relogin.body));
+  return { token: relogin.body.session.idToken, uid: reg.body.user.id, user: moved.body.user };
 }
 
 const minimalScan = {
@@ -205,51 +453,61 @@ const minimalScan = {
   findings: [],
 };
 
+let lapsedToken;
+let lapsedUid;
+
+await check("moving to a new university address sends a code to it", async () => {
+  const lapsed = await lapsedStudent(`moved-${unique()}@example.ac.uk`);
+  assert.equal(lapsed.user.studentVerification.status, "pending");
+  lapsedToken = lapsed.token;
+  lapsedUid = lapsed.uid;
+});
+
 await check("an unverified student cannot save a scan", async () => {
-  const { status, body } = await call("POST", "/scans", { token: userToken, body: minimalScan });
+  const { status, body } = await call("POST", "/scans", { token: lapsedToken, body: minimalScan });
   assert.equal(status, 403);
   assert.match(body.error.message, /verify your university email/i);
 });
 
 await check("the code is never stored on the client-readable user document", async () => {
-  const profile = (await db.collection("users").doc(userUid).get()).data();
+  const profile = (await db.collection("users").doc(lapsedUid).get()).data();
   assert.ok(!JSON.stringify(profile).includes("codeHash"));
 });
 
 await check("asking for another code straight away is refused", async () => {
-  const { status } = await call("POST", "/users/me/student-verification/send", { token: userToken });
+  const { status } = await call("POST", "/users/me/student-verification/send", {
+    token: lapsedToken,
+  });
   assert.equal(status, 429);
 });
 
 await check("a wrong code is refused and counted", async () => {
-  await plantKnownCode(userUid);
+  await plantKnownCode(lapsedUid);
   const { status } = await call("POST", "/users/me/student-verification/verify", {
-    token: userToken,
+    token: lapsedToken,
     body: { code: "000000" },
   });
   assert.equal(status, 400);
-  const stored = await db.collection("studentVerifications").doc(userUid).get();
+  const stored = await db.collection("studentVerifications").doc(lapsedUid).get();
   assert.equal(stored.data().attempts, 1);
 });
 
 await check("the right code verifies the account and unlocks scanning", async () => {
   const { status, body } = await call("POST", "/users/me/student-verification/verify", {
-    token: userToken,
+    token: lapsedToken,
     body: { code: KNOWN_CODE },
   });
   assert.equal(status, 200, JSON.stringify(body));
   assert.equal(body.user.studentVerification.status, "verified");
-  const stored = await db.collection("studentVerifications").doc(userUid).get();
+  const stored = await db.collection("studentVerifications").doc(lapsedUid).get();
   assert.ok(!stored.exists, "a used code should be deleted");
-  const record = await auth.getUser(userUid);
+  const record = await auth.getUser(lapsedUid);
   assert.equal(record.emailVerified, true);
 });
 
 await check("a code stops working after too many wrong guesses", async () => {
-  const email = `guesser-${unique()}@uni.ac.uk`;
-  const reg = await call("POST", "/auth/register", { body: { email, password: "guesser-password-1" } });
-  const token = reg.body.session.idToken;
-  await plantKnownCode(reg.body.user.id);
+  const { token, uid } = await lapsedStudent(`guesser-${unique()}@uni.ac.uk`);
+  await plantKnownCode(uid);
   for (let i = 0; i < 5; i += 1) {
     await call("POST", "/users/me/student-verification/verify", { token, body: { code: "111111" } });
   }
@@ -260,13 +518,9 @@ await check("a code stops working after too many wrong guesses", async () => {
   assert.equal(status, 429, "the right code must not work once the attempts are used up");
 });
 
-await check("a student account without a university address is told it is for students", async () => {
-  const reg = await call("POST", "/auth/register", {
-    body: { email: `hobbyist-${unique()}@example.com`, password: "hobbyist-password-1" },
-  });
-  assert.equal(reg.status, 201);
-  assert.equal(reg.body.user.studentVerification.eligible, false);
-  const token = reg.body.session.idToken;
+await check("a student who moves to a non-university address is told it is for students", async () => {
+  const { token, user } = await lapsedStudent(`hobbyist-${unique()}@example.com`);
+  assert.equal(user.studentVerification.eligible, false);
 
   const send = await call("POST", "/users/me/student-verification/send", { token });
   assert.equal(send.status, 400);
@@ -437,36 +691,47 @@ await check("a duplicate pending invitation is refused", async () => {
 let memberToken;
 let memberUid;
 
-await check("an invited person registers and joins with the token", async () => {
+await check("an invitation token that does not exist creates no account", async () => {
+  const email = `stranger-${unique()}@example.com`;
+  const { status } = await call("POST", "/auth/register", {
+    body: { email, password: "stranger-password-1", invitationToken: "f".repeat(64) },
+  });
+  assert.equal(status, 404);
+  assert.equal(await accountExists(email), false);
+});
+
+await check("an invited person registers and joins with the token in one step", async () => {
+  // Any address will do: the team sponsors the account, so it is not a student one.
   const registered = await call("POST", "/auth/register", {
-    body: { email: "invitee@example.com", password: "member-password-1", displayName: "Member" },
+    body: {
+      email: "invitee@example.com",
+      password: "member-password-1",
+      displayName: "Member",
+      invitationToken: inviteToken,
+    },
   });
   assert.equal(registered.status, 201, JSON.stringify(registered.body));
+  assert.equal(registered.body.organisation.id, orgId);
+  assert.equal(registered.body.user.organisationId, orgId);
+  assert.equal(registered.body.user.tier, "team");
+  assert.equal(registered.body.user.studentVerification.required, false);
   memberUid = registered.body.user.id;
+  // Signed in after joining, so the session already carries the team's claims.
+  memberToken = registered.body.session.idToken;
 
-  const joined = await call("POST", "/organisations/join", {
-    token: registered.body.session.idToken,
-    body: { token: inviteToken },
-  });
-  assert.equal(joined.status, 200, JSON.stringify(joined.body));
-  assert.equal(joined.body.organisation.id, orgId);
-
-  // Joining changes the claims, so a fresh sign-in is needed.
-  const relogin = await call("POST", "/auth/login", {
-    body: { email: "invitee@example.com", password: "member-password-1" },
-  });
-  memberToken = relogin.body.session.idToken;
+  const audit = await call("GET", `/organisations/${orgId}/audit`, { token: adminToken });
+  const joined = audit.body.entries.find((e) => e.action === "member.joined");
+  assert.ok(joined, "the join should be in the audit log");
+  assert.equal(joined.actorId, memberUid);
 });
 
 await check("the same invitation token cannot be used twice", async () => {
-  const other = await call("POST", "/auth/register", {
-    body: { email: `other-${unique()}@example.com`, password: "other-password-1" },
-  });
-  const { status } = await call("POST", "/organisations/join", {
-    token: other.body.session.idToken,
-    body: { token: inviteToken },
+  const email = `other-${unique()}@example.com`;
+  const { status } = await call("POST", "/auth/register", {
+    body: { email, password: "other-password-1", invitationToken: inviteToken },
   });
   assert.equal(status, 409, "a redeemed invitation should be refused");
+  assert.equal(await accountExists(email), false, "no account should be left behind");
 });
 
 await check("an admin can list the members of their own organisation", async () => {
@@ -714,11 +979,7 @@ await check("deleting a member account needs an explicit confirmation and a reas
   });
   const email = invite.body.invitation.email;
   const registered = await call("POST", "/auth/register", {
-    body: { email, password: "doomed-password-1" },
-  });
-  await call("POST", "/organisations/join", {
-    token: registered.body.session.idToken,
-    body: { token: invite.body.token },
+    body: { email, password: "doomed-password-1", invitationToken: invite.body.token },
   });
   const doomedUid = registered.body.user.id;
 
@@ -749,11 +1010,9 @@ group("Account deletion");
 await check("deleting your own account removes your scan history with it", async () => {
   const email = `throwaway-${unique()}@example.ac.uk`;
   const password = "throwaway-password-1";
-  const registered = await call("POST", "/auth/register", { body: { email, password } });
+  const registered = await registerStudent({ email, password });
   const token = registered.body.session.idToken;
   const uid = registered.body.user.id;
-  await plantKnownCode(uid);
-  await call("POST", "/users/me/student-verification/verify", { token, body: { code: KNOWN_CODE } });
 
   await call("POST", "/scans", { token, body: scanPayload("com.throwaway.app", [sampleFinding]) });
 
