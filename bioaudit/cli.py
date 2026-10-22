@@ -300,15 +300,7 @@ jobs:
           PYTHONPATH: .bioaudit
           QT_QPA_PLATFORM: offscreen
         run: >
-          python -m bioaudit scan-apk "{apk}" --offline --no-report
-          --format sarif --output bioaudit.sarif --fail-on {fail_on}
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: bioaudit-sarif
-          path: bioaudit.sarif
-          if-no-files-found: ignore
+          python -m bioaudit scan-apk "{apk}" --offline --no-report --fail-on {fail_on}
 """
 
 
