@@ -1,4 +1,4 @@
-"""Machine-readable run output for CI pipelines: plain JSON and SARIF 2.1.0.
+"""Run output for CI pipelines: plain JSON, SARIF 2.1.0 and a Markdown summary.
 
 Kept free of any UI or network import. SARIF is what GitHub code scanning, GitLab and
 Azure DevOps ingest, so findings show up next to the build without a custom parser.
@@ -74,8 +74,31 @@ def to_sarif(run: TestRun) -> str:
     return json.dumps(doc, indent=2)
 
 
+def _cell(text: str) -> str:
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
+def to_markdown(run: TestRun) -> str:
+    """Short summary for a PR comment or GitHub's job summary page."""
+    counts = ", ".join(f"{k} {v}" for k, v in run.counts().items() if v) or "no findings"
+    lines = [f"## BioAudit: {run.package}", "", f"**{counts}**", ""]
+    findings = run.ranked()
+    if findings:
+        lines += ["| Severity | Finding | Component | OWASP / MASVS |", "|---|---|---|---|"]
+        for f in findings:
+            refs = ", ".join(f.owasp + f.masvs)
+            lines.append(f"| {f.severity.label} | {_cell(f.title)} | "
+                         f"{_cell(f.component or '')} | {_cell(refs)} |")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def render(run: TestRun, fmt: str) -> str:
-    return to_sarif(run) if fmt == "sarif" else to_json(run)
+    if fmt == "sarif":
+        return to_sarif(run)
+    if fmt == "markdown":
+        return to_markdown(run)
+    return to_json(run)
 
 
 def exceeds(run: TestRun, threshold: str | None) -> bool:

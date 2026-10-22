@@ -33,4 +33,5 @@ jobs:
           PYTHONPATH: .bioaudit
           QT_QPA_PLATFORM: offscreen
         run: >
-          python -m bioaudit scan-apk "sample-vuln-app.apk" --offline --no-report --fail-on high
+          python -m bioaudit scan-apk "sample-vuln-app.apk" --offline --no-report
+          --format markdown --output "$GITHUB_STEP_SUMMARY" --fail-on high
