@@ -1,0 +1,44 @@
+name: BioAudit scan
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bioaudit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: FYP-UOW-2026/Final_Year_Project
+          path: .bioaudit
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: .bioaudit/requirements.txt
+
+      - name: Install BioAudit
+        run: pip install -r .bioaudit/requirements.txt
+
+      - name: Scan APK
+        env:
+          PYTHONPATH: .bioaudit
+          QT_QPA_PLATFORM: offscreen
+        run: >
+          python -m bioaudit scan-apk "sample-vuln-app.apk" --offline --no-report
+          --format sarif --output bioaudit.sarif --fail-on high
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bioaudit-sarif
+          path: bioaudit.sarif
+          if-no-files-found: ignore

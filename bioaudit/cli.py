@@ -7,7 +7,9 @@ Commands:
                                            a team, or --join-token to join one from an invite)
   whoami                                  show who is currently signed in
   verify-student [--code C] [--resend]    confirm a university email for a student account
-  scan-apk <apk>                          static analysis only (no device)
+  scan-apk <apk> [--offline]              static analysis only (no device); --offline needs
+                                           no account and uploads nothing (for CI)
+  init-ci [--apk PATH]                    write a GitHub Actions workflow that scans the APK
   assess  --package P --i-am-authorized   full black-box assessment on a device
   explain <scan-id>                       ask the server to explain a saved run's findings
   dashboard                               launch the Streamlit UI
@@ -38,8 +40,10 @@ from .models import TestRun
 from .report import export
 from .session import default_base_dir, list_accounts, restore_session, save_session, switch_to
 
-# 1 = upload failed, 2 = not signed in / not authorised, 3 = findings hit --fail-on.
+# 1 = upload failed, 2 = not signed in / not authorised, 3 = findings hit --fail-on,
+# 4 = the input could not be scanned (missing, corrupt, not an APK).
 EXIT_THRESHOLD = 3
+EXIT_INPUT = 4
 
 _NOT_SIGNED_IN = (
     "Not signed in. BioAudit stores every scan on your account, so run "
@@ -216,16 +220,127 @@ def cmd_verify_student(args, cfg: Config) -> int:
     return 0
 
 
+def _apk_problem(path: str) -> str | None:
+    """Why `path` cannot be scanned, or None when it looks like a plain APK. Checked before
+    androguard sees the file so a bad input is a clear message, not a traceback."""
+    import zipfile
+    if not os.path.isfile(path):
+        return f"APK not found: {path}"
+    if path.lower().endswith(".aab"):
+        return (f"{path} is an Android App Bundle (.aab). Scan an APK instead, e.g. the "
+                "output of `./gradlew assembleRelease`.")
+    if not zipfile.is_zipfile(path):
+        return f"{path} is not a valid APK (not a zip archive)."
+    with zipfile.ZipFile(path) as zf:
+        names = set(zf.namelist())
+    if "BundleConfig.pb" in names:
+        return f"{path} is an Android App Bundle, not an APK. Scan an APK instead."
+    if "AndroidManifest.xml" not in names:
+        return f"{path} is not a valid APK (no AndroidManifest.xml)."
+    return None
+
+
 def cmd_scan_apk(args, cfg: Config) -> int:
-    client = _require_session(cfg)
-    if client is None:
-        return 2
-    run = core.build_scan_apk(args.apk, cfg)
+    offline = args.offline or os.environ.get("BIOAUDIT_OFFLINE") == "1"
+    client = None
+    if not offline:
+        client = _require_session(cfg)
+        if client is None:
+            return 2
+    problem = _apk_problem(args.apk)
+    if problem:
+        print(problem, file=sys.stderr)
+        return EXIT_INPUT
+    try:
+        run = core.build_scan_apk(args.apk, cfg)
+    except Exception as exc:  # androguard raises assorted types on a corrupt archive
+        print(f"Could not analyse {args.apk}: {exc}", file=sys.stderr)
+        return EXIT_INPUT
     # A static scan reads a file the user chose, so there is no live app to authorise
     # probing against; the GUI treats this the same way.
     return _finish(run, cfg, client, authorised=True,
                    apk_file_name=os.path.basename(args.apk), client_name=args.client,
-                   fmt=args.format, output=args.output, fail_on=args.fail_on)
+                   fmt=args.format, output=args.output, fail_on=args.fail_on,
+                   no_report=args.no_report)
+
+
+_CI_WORKFLOW = """\
+name: BioAudit scan
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bioaudit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: FYP-UOW-2026/Final_Year_Project
+          path: .bioaudit
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: .bioaudit/requirements.txt
+
+      - name: Install BioAudit
+        run: pip install -r .bioaudit/requirements.txt
+
+      - name: Scan APK
+        env:
+          PYTHONPATH: .bioaudit
+          QT_QPA_PLATFORM: offscreen
+        run: >
+          python -m bioaudit scan-apk "{apk}" --offline --no-report
+          --format sarif --output bioaudit.sarif --fail-on {fail_on}
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bioaudit-sarif
+          path: bioaudit.sarif
+          if-no-files-found: ignore
+"""
+
+
+def cmd_init_ci(args, cfg: Config) -> int:
+    """Write .github/workflows/bioaudit.yml. The APK path is resolved relative to the repo
+    root so the workflow works from a clean checkout."""
+    import glob
+    root = os.path.abspath(args.dir)
+    apk = args.apk
+    if not apk:
+        found = sorted(glob.glob(os.path.join(root, "**", "build", "outputs", "apk", "**",
+                                              "*.apk"), recursive=True))
+        if not found:
+            print("No APK found under build/outputs/apk. Pass --apk PATH "
+                  "(relative to the repo root).", file=sys.stderr)
+            return EXIT_INPUT
+        apk = os.path.relpath(found[0], root)
+    elif os.path.isabs(apk):
+        apk = os.path.relpath(apk, root)
+    apk = apk.replace(os.sep, "/")
+    if apk.startswith(".."):
+        print(f"{apk} is outside the repository root {root}.", file=sys.stderr)
+        return EXIT_INPUT
+    if not os.path.isfile(os.path.join(root, apk)):
+        print(f"Warning: {apk} does not exist yet; the workflow will fail until it is "
+              "committed or built.", file=sys.stderr)
+    out = os.path.join(root, ".github", "workflows", "bioaudit.yml")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w", encoding="utf-8") as fh:
+        fh.write(_CI_WORKFLOW.format(apk=apk, fail_on=args.fail_on))
+    print(f"Wrote {os.path.relpath(out, root)} (scans {apk}, fails on {args.fail_on}+).")
+    return 0
 
 
 def cmd_assess(args, cfg: Config) -> int:
@@ -309,65 +424,81 @@ def cmd_gui(args, cfg: Config) -> int:
     return run_gui(cfg)
 
 
-def _finish(run: TestRun, cfg: Config, client: ApiClient, *, authorised: bool,
+def _finish(run: TestRun, cfg: Config, client: ApiClient | None, *, authorised: bool,
            apk_file_name: str | None, client_name: str | None = None,
            fmt: str | None = None, output: str | None = None,
-           fail_on: str | None = None) -> int:
-    """Rank, upload to the account (the only place the run is stored), and write the
-    report file the user asked for. Uploading is not optional here: skipping it would
-    leave the run nowhere at all once the process exits. Explaining findings with AI is
-    a separate step (`bioaudit explain <scan-id>`) since it needs the scan id this
-    function is what produces."""
+           fail_on: str | None = None, no_report: bool = False) -> int:
+    """Rank, write the machine-readable output and judge --fail-on, then upload to the
+    account (the only place the run is stored when signed in) and write the report file.
+    The format output and the threshold verdict come first so a failed upload can never
+    hide them. `client` is None for an offline run: nothing is uploaded or stored.
+    Explaining findings with AI is a separate step (`bioaudit explain <scan-id>`) since
+    it needs the scan id this function is what produces."""
     core.process_findings(run)
 
+    # With --format and no --output stdout carries only the document, so a pipe stays valid.
+    log = sys.stderr if fmt and not output else sys.stdout
     counts = run.counts()
     print(f"\nAssessed {run.package}: " +
-          (", ".join(f"{k} {v}" for k, v in counts.items() if v) or "no findings"))
-    _print_findings(run)
+          (", ".join(f"{k} {v}" for k, v in counts.items() if v) or "no findings"), file=log)
+    _print_findings(run, log)
 
-    try:
-        result = client.upload_run(run, authorised=authorised, apk_file_name=apk_file_name,
-                                   client_name=client_name)
-        upload_failed = None
-    except ApiClientError as exc:
-        upload_failed = exc
+    if fmt:
+        text = export.render(run, fmt)
+        if output:
+            parent = os.path.dirname(output)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(output, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            print(f"{fmt.upper()} written to: {output}", file=log)
+        else:
+            print(text)
+
+    exceeded = export.exceeds(run, fail_on)
+    if exceeded:
+        print(f"Failing the build: a finding is at or above '{fail_on}'.", file=sys.stderr)
+
+    upload_failed = None
+    result = None
+    if client is not None:
+        try:
+            result = client.upload_run(run, authorised=authorised,
+                                       apk_file_name=apk_file_name, client_name=client_name)
+        except ApiClientError as exc:
+            upload_failed = exc
 
     # Written either way: a report the user can see with their own eyes is worth having
     # even when the upload — the run's only real storage — did not go through.
-    path = core.write_report(run, cfg)
+    path = None if no_report else core.write_report(run, cfg)
 
     if upload_failed is not None:
         print(f"\nCould not save this run to your account: {upload_failed}", file=sys.stderr)
         print("This run exists nowhere else; rerun this command once the problem is "
               "fixed (check your connection and `bioaudit whoami`).", file=sys.stderr)
-        print(f"A copy of the findings was written to: {path}", file=sys.stderr)
-        return 1
+        if path:
+            print(f"A copy of the findings was written to: {path}", file=sys.stderr)
+        return EXIT_THRESHOLD if exceeded else 1
 
-    scan_id = result["scan"]["id"]
-    print(f"\nSaved to your account: {scan_id}")
-    retention = result.get("retention")
-    if retention and retention.get("removed"):
-        print(retention["message"])
-    print(f"Report written to: {path}")
-    print(f"For plain-language explanations, run: bioaudit explain {scan_id}")
+    if result is not None:
+        scan_id = result["scan"]["id"]
+        print(f"\nSaved to your account: {scan_id}", file=log)
+        retention = result.get("retention")
+        if retention and retention.get("removed"):
+            print(retention["message"], file=log)
+        if path:
+            print(f"Report written to: {path}", file=log)
+        print(f"For plain-language explanations, run: bioaudit explain {scan_id}", file=log)
+    elif path:
+        print(f"Report written to: {path}", file=log)
 
-    if fmt:
-        text = export.render(run, fmt)
-        if output:
-            with open(output, "w", encoding="utf-8") as fh:
-                fh.write(text)
-            print(f"{fmt.upper()} written to: {output}")
-        else:
-            print(text)
-    if export.exceeds(run, fail_on):
-        print(f"Failing the build: a finding is at or above '{fail_on}'.", file=sys.stderr)
-        return EXIT_THRESHOLD
-    return 0
+    return EXIT_THRESHOLD if exceeded else 0
 
 
-def _print_findings(run: TestRun) -> None:
+def _print_findings(run: TestRun, file=None) -> None:
     for f in run.ranked():
-        print(f"  [{f.severity.label:8}] {f.title}  ({', '.join(f.owasp + f.masvs)})")
+        print(f"  [{f.severity.label:8}] {f.title}  ({', '.join(f.owasp + f.masvs)})",
+              file=file or sys.stdout)
 
 
 def _add_ci_flags(parser: argparse.ArgumentParser) -> None:
@@ -434,8 +565,18 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("scan-apk", help="static analysis of an APK (no device)")
     s.add_argument("apk")
     s.add_argument("--client", help="client name to record in the authorisation record")
+    s.add_argument("--offline", action="store_true",
+                   help="no sign-in and no upload (also BIOAUDIT_OFFLINE=1); for CI")
+    s.add_argument("--no-report", action="store_true",
+                   help="do not write the HTML report under reports/")
     _add_ci_flags(s)
     s.set_defaults(func=cmd_scan_apk)
+
+    ci = sub.add_parser("init-ci", help="write a GitHub Actions workflow that scans your APK")
+    ci.add_argument("--apk", help="APK path in your repo (auto-detected under build/outputs/apk)")
+    ci.add_argument("--fail-on", choices=export.FAIL_ON_CHOICES, default="high")
+    ci.add_argument("--dir", default=".", help="repository root (default: current directory)")
+    ci.set_defaults(func=cmd_init_ci)
 
     a = sub.add_parser("assess", help="full black-box assessment on a connected device")
     a.add_argument("--package", required=True)
