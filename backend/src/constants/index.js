@@ -9,6 +9,7 @@ export const COLLECTIONS = {
   FLAGS: "flags",
   AUDIT: "auditLog",
   STUDENT_VERIFICATIONS: "studentVerifications",
+  SIGNUP_VERIFICATIONS: "signupVerifications",
 };
 
 /**

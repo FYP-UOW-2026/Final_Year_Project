@@ -246,19 +246,50 @@ class ApiClient:
 
     # --- authentication ---------------------------------------------------
 
+    def send_signup_code(self, email: str, university_id: Optional[str] = None) -> dict:
+        """Email the code a student signs up with.
+
+        The first step of registering a personal account: the code proves the
+        university address before the account exists. Pass it on to register().
+        Returns the server's reply: "message" to show, and "sendId" for
+        signup_code_status().
+        """
+        payload = {"email": email}
+        if university_id:
+            payload["universityId"] = university_id
+        return self._request("POST", "/auth/register/send-code", body=payload,
+                             authenticated=False)
+
+    def signup_code_status(self, email: str, send_id: str) -> dict:
+        """Whether a sign-up code bounced: {"status": "sent"} until the address turns
+        out not to exist, then {"status": "bounced", "message": ...}."""
+        return self._request("POST", "/auth/register/code-status",
+                             body={"email": email, "sendId": send_id},
+                             authenticated=False, timeout=10)
+
     def register(self, email: str, password: str,
                  display_name: Optional[str] = None,
                  university_id: Optional[str] = None,
+                 code: Optional[str] = None,
+                 invitation_token: Optional[str] = None,
                  tos_accepted: bool = False) -> Account:
-        """Create a personal account. `university_id` comes from list_universities();
-        the server then requires the email to be one that university issues.
-        `tos_accepted` records that the user agreed to docs/TERMS.md; the server
-        refuses signup without it."""
+        """Create a personal account, signed in.
+
+        A student passes the `code` that send_signup_code() emailed them, and the same
+        `university_id` (from list_universities()) if they picked one. Someone invited to
+        a team passes `invitation_token` instead, and the account joins that team in the
+        same step. `tos_accepted` records that the user agreed to docs/TERMS.md; the
+        server refuses signup without it.
+        """
         payload = {"email": email, "password": password, "tosAccepted": bool(tos_accepted)}
         if display_name:
             payload["displayName"] = display_name
         if university_id:
             payload["universityId"] = university_id
+        if code:
+            payload["code"] = code.strip()
+        if invitation_token:
+            payload["invitationToken"] = invitation_token.strip()
 
         data = self._request("POST", "/auth/register", body=payload, authenticated=False)
         self.session = Session.from_payload(data["session"])

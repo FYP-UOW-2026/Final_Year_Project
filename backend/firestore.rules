@@ -27,9 +27,14 @@ service cloud.firestore {
         && request.auth.token.organisationId == orgId;
     }
 
-    // A user may read their own record. The website may create it once at sign-up, but
-    // only as a plain free/member account with their real login email. Tier and role can
-    // only be changed by the server, so nobody can grant themselves premium or admin.
+    // A user may read their own record. The website may create it once at an organisation
+    // sign-up, but only as a plain free/member account with their real login email. Tier
+    // and role can only be changed by the server, so nobody can grant themselves admin.
+    //
+    // A student sign-up cannot be made here at all: a student has to prove their
+    // university email before the account exists, which only the API can check. The
+    // website signs students up with POST /api/auth/register/send-code and then
+    // POST /api/auth/register, as the desktop app does.
     match /users/{userId} {
       allow read: if isOwner(userId);
       allow create: if isOwner(userId)
@@ -40,7 +45,7 @@ service cloud.firestore {
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.displayName is string
         && request.resource.data.displayName.size() <= 80
-        && request.resource.data.requestedPlan in ['student', 'organisation']
+        && request.resource.data.requestedPlan == 'organisation'
         && request.resource.data.tier == 'free'
         && request.resource.data.role == 'member'
         && request.resource.data.organisationId == null
@@ -71,6 +76,12 @@ service cloud.firestore {
     // Student verification codes are only six digits, so even their hash must stay out of
     // reach of the client: trying all million values would take seconds.
     match /studentVerifications/{userId} {
+      allow read, write: if false;
+    }
+
+    // The same goes for the codes students sign up with, which are kept here until the
+    // account they prove exists.
+    match /signupVerifications/{addressHash} {
       allow read, write: if false;
     }
 
