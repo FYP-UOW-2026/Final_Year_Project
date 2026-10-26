@@ -135,6 +135,29 @@ export async function cancelInvitation({ orgId, invitationId }) {
 }
 
 /**
+ * Refuse a token that could not be redeemed right now, without redeeming it.
+ *
+ * Lets registration turn a bad invitation into a form error before it creates an
+ * account that would have nothing to join. acceptInvitation checks again as it redeems,
+ * since the invitation can change in between.
+ */
+export async function checkInvitation(token) {
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+
+  const found = await invitations().where("tokenHash", "==", tokenHash).limit(1).get();
+  if (found.empty) throw ApiError.notFound("That invitation link is not valid.");
+
+  const invitation = found.docs[0].data();
+  if (invitation.status !== INVITATION_STATUS.PENDING) {
+    throw ApiError.conflict(`That invitation has already been ${invitation.status}.`);
+  }
+  const expiresAt = invitation.expiresAt?.toDate?.() ?? new Date(invitation.expiresAt);
+  if (expiresAt < new Date()) {
+    throw ApiError.conflict("That invitation has expired. Ask for a new one.");
+  }
+}
+
+/**
  * Accept an invitation and join its organisation.
  *
  * Runs as a transaction so a token cannot be redeemed twice by two requests arriving at

@@ -299,12 +299,10 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
                     if len(token) < 16:
                         return self._fail("That does not look like a valid invite token.")
                     name = self.join_name.text().strip() or None
-                    # Create the account, redeem the invite, then sign in again: joining
-                    # revokes the session server-side so the new team permissions take
-                    # effect on the next sign-in.
-                    client.register(email, password, name, tos_accepted=True)
-                    client.join_organisation(token)
-                    client.login(email, password)
+                    # Creates the account and redeems the invite in one step, so the
+                    # session that comes back already carries the team's permissions.
+                    client.register(email, password, name, invitation_token=token,
+                                    tos_accepted=True)
 
                 else:  # SIGNIN
                     email = self.login_email.text().strip()

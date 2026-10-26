@@ -3,8 +3,9 @@
 Commands:
   login   [--email E]                     sign in and remember the session
   logout                                  end the saved session
-  register --email E --password P         create an account (add --organisation to admin
-                                           a team, or --join-token to join one from an invite)
+  register --email E --password P         create a student account, after entering the code
+                                           emailed to E (add --organisation to admin a team,
+                                           or --join-token to join one from an invite)
   whoami                                  show who is currently signed in
   verify-student [--code C] [--resend]    confirm a university email for a student account
   scan-apk <apk> [--offline]              static analysis only (no device); --offline needs
@@ -139,14 +140,20 @@ def cmd_register(args, cfg: Config) -> int:
         if args.organisation:
             client.register_admin(args.email, password, args.organisation, args.name,
                                   tos_accepted=True, solo=args.solo)
-        else:
+        elif args.join_token:
+            # Creates the account and joins the team in one step, matching the GUI.
             client.register(args.email, password, args.name,
-                            university_id=args.university, tos_accepted=True)
-            if args.join_token:
-                # Joining revokes the session server-side so the new team permissions
-                # take effect, so a fresh sign-in follows, matching the GUI's join flow.
-                client.join_organisation(args.join_token)
-                client.login(args.email, password)
+                            invitation_token=args.join_token, tos_accepted=True)
+        else:
+            # A student account is only created once the university email is proved,
+            # so the code comes first. --code skips sending one, for a code already had.
+            code = args.code
+            if not code:
+                sent = client.send_signup_code(args.email, args.university)
+                print(sent.get("message", ""))
+                code = _prompt_signup_code(client, args.email, sent.get("sendId"))
+            client.register(args.email, password, args.name,
+                            university_id=args.university, code=code, tos_accepted=True)
     except ApiClientError as exc:
         print(f"Registration failed: {exc}", file=sys.stderr)
         return 1
@@ -155,14 +162,22 @@ def cmd_register(args, cfg: Config) -> int:
         save_session(default_base_dir(), client)
     print(f"Registered and signed in as {client.account.email} ({client.account.tier}"
           f"{', admin' if client.account.is_admin else ''}).")
-    if client.account.needs_student_verification:
-        if client.account.student_verification.get("status") == "pending":
-            print(f"A six-digit code has been emailed to {client.account.email}. "
-                  "Enter it with `bioaudit verify-student` to unlock scanning.")
-        else:
-            print("A student account needs a verified university email before you can scan. "
-                  "Run `bioaudit verify-student`.")
     return 0
+
+
+def _prompt_signup_code(client: ApiClient, email: str, send_id: str | None) -> str:
+    """Ask for the emailed code. An empty answer checks whether the email bounced, so a
+    student with a mistyped address finds out instead of waiting indefinitely."""
+    while True:
+        code = input("Six-digit code from the email (or press Enter to check it did "
+                     "not bounce): ").strip()
+        if code:
+            return code
+        if send_id:
+            status = client.signup_code_status(email, send_id)
+            if status.get("status") == "bounced":
+                raise ApiClientError(status.get("message", "The code bounced."))
+        print("No bounce reported. Check your junk folder, or give it a minute.")
 
 
 def cmd_whoami(args, cfg: Config) -> int:
@@ -542,6 +557,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--university", metavar="ID",
                    help="your university's id from GET /api/universities; the email "
                         "must be one it issues (student accounts)")
+    r.add_argument("--code", help="the six-digit code already emailed to you; omit to "
+                                  "have one sent and be prompted for it (student accounts)")
     r.add_argument("--accept-terms", action="store_true",
                    help="accept the Terms of Use (docs/TERMS.md) without being prompted")
     r.set_defaults(func=cmd_register)
