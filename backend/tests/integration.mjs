@@ -1230,6 +1230,7 @@ await check("cancelling stops the renewal but keeps access until the year ends",
   const [sent] = stripeCalls;
   assert.equal(sent.path, "/v1/subscriptions/sub_test");
   assert.equal(sent.params.cancel_at_period_end, "true");
+  assert.equal(sent.params["cancellation_details[comment]"], "testing", "the reason reaches Stripe");
   assert.equal(sent.auth, "Bearer sk_test_fake");
 
   const scans = await call("GET", "/scans", { token: subMemberToken });
