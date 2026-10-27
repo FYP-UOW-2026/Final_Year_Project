@@ -146,7 +146,7 @@ router.post(
   }),
   asyncHandler(async (req, res) => {
     const org = await organisations.getOrganisation(req.params.orgId);
-    const status = await billing.setCancelAtPeriodEnd(org, true);
+    const status = await billing.setCancelAtPeriodEnd(org, true, req.body.reason || null);
 
     await audit.record({
       action: audit.AUDIT_ACTIONS.SUBSCRIPTION_CANCELLED,

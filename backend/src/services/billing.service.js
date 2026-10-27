@@ -155,7 +155,7 @@ async function stripe(path, params) {
  * The extension mirrors the change into Firestore when Stripe's webhook arrives; the
  * mirror is also updated here so the app shows the new state straight away.
  */
-export async function setCancelAtPeriodEnd(org, cancel) {
+export async function setCancelAtPeriodEnd(org, cancel, reason = null) {
   const current = await statusFor(org);
   if (!current.subscriptionId || current.state === BILLING_STATE.ENDED) {
     throw ApiError.conflict("Your organisation has no subscription that is still running.");
@@ -169,6 +169,8 @@ export async function setCancelAtPeriodEnd(org, cancel) {
 
   await stripe(`subscriptions/${current.subscriptionId}`, {
     cancel_at_period_end: cancel ? "true" : "false",
+    // Shown as the cancellation comment on the subscription in Stripe's dashboard.
+    ...(cancel && reason ? { "cancellation_details[comment]": reason } : {}),
   });
   await customers()
     .doc(org.ownerId)
