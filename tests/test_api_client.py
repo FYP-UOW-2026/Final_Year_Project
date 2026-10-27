@@ -375,6 +375,49 @@ def test_team_admin_without_solo_cannot_upload(client: ApiClient):
     assert exc.value.status == 403
 
 
+def _set_subscription_status(owner_uid: str, status: str) -> None:
+    """Write the owner's Stripe subscription the way the payments extension would."""
+    doc = (f"http://{FIRESTORE_EMULATOR}/v1/projects/{EMULATOR_PROJECT}/databases/(default)"
+           f"/documents/customers/{owner_uid}/subscriptions/sub_pytest")
+    body = {"fields": {
+        "status": {"stringValue": status},
+        "cancel_at_period_end": {"booleanValue": status != "active"},
+        "current_period_end": {"timestampValue": "2027-10-27T00:00:00Z"},
+    }}
+    request = urllib.request.Request(
+        doc, data=json.dumps(body).encode(), method="PATCH",
+        headers={"Content-Type": "application/json", "Authorization": "Bearer owner"})
+    urllib.request.urlopen(request, timeout=5).close()
+
+
+def test_a_suspended_organisation_is_reported_to_its_members(client: ApiClient):
+    admin, organisation = client.register_admin(
+        f"pytest-billing-{_unique()}@example.com", "pytest-password-1", "Pytest Billing",
+        tos_accepted=True)
+    org_id = organisation["id"]
+    member_email = f"pytest-billed-{_unique()}@example.com"
+    invitation = client.invite_member(org_id, member_email)
+    member = ApiClient(BASE_URL)
+    member.register(member_email, "pytest-password-1",
+                    invitation_token=invitation["token"], tos_accepted=True)
+
+    _set_subscription_status(admin.id, "active")
+    assert client.org_subscription(org_id)["state"] == "active"
+    assert member.my_organisation()["subscription"]["periodEnd"].startswith("2027-10-27")
+
+    # The paid year ended after a cancellation: everyone is suspended.
+    _set_subscription_status(admin.id, "canceled")
+    with pytest.raises(ApiClientError) as exc:
+        member.list_history()
+    assert exc.value.organisation_suspended
+    assert member.my_organisation()["subscription"]["state"] == "ended"
+    # The admin can still see the subscription, to renew it.
+    assert client.org_subscription(org_id)["state"] == "ended"
+    with pytest.raises(ApiClientError) as exc:
+        client.list_members(org_id)
+    assert exc.value.organisation_suspended
+
+
 def test_register_requires_terms(client: ApiClient):
     with pytest.raises(ApiClientError) as exc:
         client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1",

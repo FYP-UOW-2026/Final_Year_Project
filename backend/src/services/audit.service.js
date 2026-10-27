@@ -21,6 +21,8 @@ export const AUDIT_ACTIONS = {
   MEMBER_REINSTATED: "member.reinstated",
   ADMIN_ADDED: "admin.added",
   TIER_CHANGED: "subscription.tier_changed",
+  SUBSCRIPTION_CANCELLED: "subscription.cancelled",
+  SUBSCRIPTION_RESUMED: "subscription.resumed",
 };
 
 /**

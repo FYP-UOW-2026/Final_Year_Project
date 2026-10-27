@@ -38,6 +38,9 @@ export function errorHandler(err, req, res, next) {
   if (isKnown && err.details) {
     body.error.details = err.details;
   }
+  if (isKnown && err.code) {
+    body.error.code = err.code;
+  }
   if (!env.isProduction && !isKnown) {
     body.error.debug = { message: err.message, stack: err.stack };
   }

@@ -641,6 +641,47 @@ def run(cfg: Config | None = None) -> int:
             # The History tab has nothing of its own to poll on a timer, so any moment
             # the signed-in account might have changed is also a moment to refresh it.
             self._reload_history()
+            self._check_organisation_subscription(account)
+
+        def _check_organisation_subscription(self, account) -> None:
+            """Explain a suspended organisation once, at the moment someone signs in.
+
+            The server already refuses everything for an organisation whose paid year
+            ended without renewal. This turns that into one clear message: a member is
+            told to ask their admin and signed out, and an admin is taken to Team →
+            Subscription, the one place still open to them, to renew.
+            """
+            if account is None or not account.organisation_id:
+                self._suspension_shown_for = None
+                return
+            try:
+                org = self.api.my_organisation()
+            except Exception:  # noqa: BLE001 - a failed check must not block sign-in
+                return
+            subscription = (org or {}).get("subscription") or {}
+            if subscription.get("active") is not False:
+                self._suspension_shown_for = None
+                return
+            if getattr(self, "_suspension_shown_for", None) == account.id:
+                return
+            self._suspension_shown_for = account.id
+
+            from PySide6.QtCore import QTimer
+            if account.is_admin:
+                QMessageBox.warning(
+                    self, "Subscription ended",
+                    "Your organisation's subscription has ended, so your account and every "
+                    "member's account are suspended.\n\nRenew it from Team → Subscription to "
+                    "restore access for everyone.")
+                self.tabs.setCurrentIndex(self._team_tab_index)
+            else:
+                QMessageBox.warning(
+                    self, "Subscription ended",
+                    "Your organisation's subscription has ended, so your account is "
+                    "suspended until it is renewed.\n\nAsk your organisation's admin to renew "
+                    "it. You will be signed out now.")
+                # Deferred: this can run inside a sign-in flow, which should finish first.
+                QTimer.singleShot(0, self._sign_out)
 
         def _update_save_report_buttons(self) -> None:
             """Single place the three "Save report from account" buttons get their state.

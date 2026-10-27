@@ -33,6 +33,31 @@ process.env.API_RATE_LIMIT_PER_MINUTE = "100000";
 const WEBHOOK_KEY = "integration-webhook-signing-key";
 process.env.MAILGUN_WEBHOOK_SIGNING_KEY = WEBHOOK_KEY;
 
+// A stand-in for Stripe's API, so the subscription tests run without a Stripe account.
+// It records what the app sent and answers the way Stripe would.
+const { createServer } = await import("node:http");
+const stripeCalls = [];
+const fakeStripe = createServer((req, res) => {
+  let raw = "";
+  req.on("data", (chunk) => { raw += chunk; });
+  req.on("end", () => {
+    const params = Object.fromEntries(new URLSearchParams(raw));
+    stripeCalls.push({ path: req.url, params, auth: req.headers.authorization });
+    res.setHeader("Content-Type", "application/json");
+    if (req.url.startsWith("/v1/billing_portal/sessions")) {
+      return res.end(JSON.stringify({ url: "https://billing.stripe.test/portal" }));
+    }
+    if (req.url.startsWith("/v1/checkout/sessions")) {
+      return res.end(JSON.stringify({ url: "https://checkout.stripe.test/renew" }));
+    }
+    res.end(JSON.stringify({ id: req.url.split("/").pop(), object: "subscription" }));
+  });
+});
+await new Promise((resolve) => fakeStripe.listen(0, "127.0.0.1", resolve));
+process.env.STRIPE_SECRET_KEY = "sk_test_fake";
+process.env.STRIPE_API_BASE = `http://127.0.0.1:${fakeStripe.address().port}`;
+process.env.STRIPE_PRICE_ID = "price_yearly_test";
+
 const { createApp } = await import("../src/app.js");
 const { db, auth } = await import("../src/config/firebase.js");
 const { hashCode, signupCodeId } = await import("../src/services/studentVerification.service.js");
@@ -1120,6 +1145,164 @@ await check("deleting a member account needs an explicit confirmation and a reas
   assert.equal(deletion.metadata.reason, "Left the company");
 });
 
+group("Organisation subscription");
+
+// What the "Run Payments with Stripe" extension writes when the owner pays: a customer
+// record and the yearly subscription under it. Written straight into the emulator here.
+let ownerUid;
+let subMemberToken;
+const subRef = () =>
+  db.collection("customers").doc(ownerUid).collection("subscriptions").doc("sub_test");
+
+await check("an organisation that never subscribed keeps working", async () => {
+  ownerUid = (await auth.getUserByEmail(adminEmail)).uid;
+  const { status, body } = await call("GET", `/organisations/${orgId}/subscription`, {
+    token: adminToken,
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.subscription.state, "none");
+  assert.equal(body.subscription.active, true);
+});
+
+await check("a paid yearly subscription is shared by everyone in the organisation", async () => {
+  const yearFromNow = new Date(Date.now() + 365 * 24 * 3600 * 1000);
+  await db.collection("customers").doc(ownerUid).set({ stripeId: "cus_test", email: adminEmail });
+  await subRef().set({
+    status: "active",
+    cancel_at_period_end: false,
+    created: new Date(),
+    current_period_end: yearFromNow,
+  });
+
+  // A fresh member, to show the shared year reaches people other than the payer.
+  const invite = await call("POST", `/organisations/${orgId}/invitations`, {
+    token: adminToken,
+    body: { email: `subscriber-${unique()}@example.com`, role: "member" },
+  });
+  const registered = await call("POST", "/auth/register", {
+    body: {
+      email: invite.body.invitation.email,
+      password: "subscriber-password-1",
+      invitationToken: invite.body.token,
+    },
+  });
+  assert.equal(registered.status, 201, JSON.stringify(registered.body));
+  subMemberToken = registered.body.session.idToken;
+
+  const mine = await call("GET", "/organisations/mine", { token: subMemberToken });
+  assert.equal(mine.status, 200, JSON.stringify(mine.body));
+  assert.equal(mine.body.organisation.subscription.state, "active");
+  assert.equal(
+    new Date(mine.body.organisation.subscription.periodEnd).toDateString(),
+    yearFromNow.toDateString(),
+    "members see the same renewal date as the admin"
+  );
+});
+
+await check("only an admin can cancel the subscription", async () => {
+  const { status } = await call("POST", `/organisations/${orgId}/subscription/cancel`, {
+    token: subMemberToken,
+    body: { confirm: "CANCEL" },
+  });
+  assert.equal(status, 403);
+});
+
+await check("cancelling stops the renewal but keeps access until the year ends", async () => {
+  const missing = await call("POST", `/organisations/${orgId}/subscription/cancel`, {
+    token: adminToken,
+    body: {},
+  });
+  assert.equal(missing.status, 400, "cancelling needs an explicit confirmation");
+
+  stripeCalls.length = 0;
+  const { status, body } = await call("POST", `/organisations/${orgId}/subscription/cancel`, {
+    token: adminToken,
+    body: { confirm: "CANCEL", reason: "testing" },
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.subscription.state, "cancelling");
+  assert.equal(body.subscription.active, true);
+
+  const [sent] = stripeCalls;
+  assert.equal(sent.path, "/v1/subscriptions/sub_test");
+  assert.equal(sent.params.cancel_at_period_end, "true");
+  assert.equal(sent.auth, "Bearer sk_test_fake");
+
+  const scans = await call("GET", "/scans", { token: subMemberToken });
+  assert.equal(scans.status, 200, "members keep access for the rest of the paid year");
+
+  const log = await call("GET", `/organisations/${orgId}/audit`, { token: adminToken });
+  assert.ok(log.body.entries.some((e) => e.action === "subscription.cancelled"));
+});
+
+await check("a cancellation can be undone before the year ends", async () => {
+  stripeCalls.length = 0;
+  const { status, body } = await call("POST", `/organisations/${orgId}/subscription/resume`, {
+    token: adminToken,
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.subscription.state, "active");
+  assert.equal(stripeCalls[0].params.cancel_at_period_end, "false");
+});
+
+await check("the admin can open Stripe's billing page to manage or cancel online", async () => {
+  const { status, body } = await call("POST", `/organisations/${orgId}/subscription/portal`, {
+    token: adminToken,
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.url, "https://billing.stripe.test/portal");
+  assert.equal(stripeCalls.at(-1).params.customer, "cus_test");
+});
+
+await check("when the paid year ends, the admin and every member are suspended", async () => {
+  // Stripe marks a cancelled subscription "canceled" once its paid year is over.
+  await subRef().set({ status: "canceled", cancel_at_period_end: true }, { merge: true });
+
+  const member = await call("GET", "/scans", { token: subMemberToken });
+  assert.equal(member.status, 403);
+  assert.equal(member.body.error.code, "ORGANISATION_SUBSCRIPTION_ENDED");
+  assert.match(member.body.error.message, /ask your organisation's admin/i);
+
+  const admin = await call("GET", `/organisations/${orgId}/members`, { token: adminToken });
+  assert.equal(admin.status, 403);
+  assert.equal(admin.body.error.code, "ORGANISATION_SUBSCRIPTION_ENDED");
+
+  // Still allowed: seeing why, and for the admin, paying.
+  const mine = await call("GET", "/organisations/mine", { token: subMemberToken });
+  assert.equal(mine.status, 200);
+  assert.equal(mine.body.organisation.subscription.state, "ended");
+  const me = await call("GET", "/users/me", { token: subMemberToken });
+  assert.equal(me.status, 200);
+});
+
+await check("a member of a suspended organisation cannot reach the renewal", async () => {
+  const { status } = await call("POST", `/organisations/${orgId}/subscription/renew`, {
+    token: subMemberToken,
+  });
+  assert.equal(status, 403);
+});
+
+await check("the admin of a suspended organisation can renew, which restores access", async () => {
+  const { status, body } = await call("POST", `/organisations/${orgId}/subscription/renew`, {
+    token: adminToken,
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.url, "https://checkout.stripe.test/renew");
+  const sent = stripeCalls.at(-1);
+  assert.equal(sent.params.mode, "subscription");
+  assert.equal(sent.params["line_items[0][price]"], "price_yearly_test");
+
+  // Stripe's webhook then records the new paid year, and everyone is back in.
+  await db.collection("customers").doc(ownerUid).collection("subscriptions").doc("sub_renewed").set({
+    status: "active",
+    cancel_at_period_end: false,
+    created: new Date(),
+    current_period_end: new Date(Date.now() + 365 * 24 * 3600 * 1000),
+  });
+  const member = await call("GET", "/scans", { token: subMemberToken });
+  assert.equal(member.status, 200, JSON.stringify(member.body));
+});
+
 group("Account deletion");
 
 await check("deleting your own account removes your scan history with it", async () => {
@@ -1166,6 +1349,7 @@ await check("deleting your own account removes your scan history with it", async
 // --- done ------------------------------------------------------------------
 
 server.close();
+fakeStripe.close();
 
 console.log(`\n${passed} passed, ${failures.length} failed.`);
 if (failures.length > 0) {
