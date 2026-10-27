@@ -101,7 +101,7 @@ async function refuseSuspendedOrganisation(req) {
   if (!req.user.organisationId || allowedWhileSuspended(req)) return;
   const status = await billing.statusForId(req.user.organisationId);
   if (status && !status.active) {
-    throw billing.suspendedError(req.user.role === ROLES.ADMIN);
+    throw billing.suspendedError(req.user.role === ROLES.ADMIN, status.state);
   }
 }
 

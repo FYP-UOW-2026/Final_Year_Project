@@ -299,8 +299,13 @@ subscription into `customers/{ownerUid}/subscriptions`. The API reads that mirro
   `/organisations/mine`; admins can also reach the subscription routes, to renew. Paying again
   restores access for everyone.
 - **Only admins** can cancel, resume or renew. Students are not part of this subscription.
-- An organisation with no Stripe subscription at all (created in the app, or before billing)
-  keeps working unless `REQUIRE_ORG_SUBSCRIPTION=true`.
+- Signing up an organisation through `POST /api/auth/register-admin` (the desktop app) starts
+  the subscription: once Stripe is configured, the organisation is `unpaid` and locked like
+  an ended one until the admin pays through `subscription/renew`. If the owner is not a
+  Stripe customer yet, the checkout goes through the extension's `checkout_sessions`, as the
+  website's does. `BILL_NEW_ORGANISATIONS=false` turns this off.
+- An organisation from before this, with no Stripe subscription at all, keeps working
+  unless `REQUIRE_ORG_SUBSCRIPTION=true`.
 - Cancel, resume, billing page and renew need `STRIPE_SECRET_KEY`; renew also needs
   `STRIPE_PRICE_ID`. See `.env.example`.
 

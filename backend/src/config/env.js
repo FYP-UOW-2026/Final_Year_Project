@@ -248,6 +248,12 @@ export const env = {
     // before billing existed) keeps working unless this is set. One that has ever had a
     // subscription always follows it.
     requireForOrganisations: optional("REQUIRE_ORG_SUBSCRIPTION") === "true",
+    // An organisation registered through the API (the desktop app's sign-up) must pay
+    // before it can be used, once billing is set up. "false" turns that off.
+    billNewOrganisations: optional("BILL_NEW_ORGANISATIONS") !== "false",
+    get billsNewOrganisations() {
+      return this.enabled && Boolean(this.priceId) && this.billNewOrganisations;
+    },
     get enabled() {
       return Boolean(this.secretKey);
     },

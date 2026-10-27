@@ -22,6 +22,7 @@ const LIVE_STATUSES = ["active", "trialing", "past_due"];
 
 export const BILLING_STATE = {
   NONE: "none", // never subscribed (an in-app or pre-billing organisation)
+  UNPAID: "unpaid", // signed up in the app and locked until its first payment
   ACTIVE: "active", // paid and set to renew
   CANCELLING: "cancelling", // paid until the end of the year, will not renew
   ENDED: "ended", // the paid year is over: everyone is suspended until payment
@@ -62,10 +63,12 @@ async function findSubscription(ownerId) {
 
 function summarise(org, sub) {
   if (!sub) {
-    const required = env.stripe.requireForOrganisations;
+    let state = BILLING_STATE.NONE;
+    if (org.billingRequired) state = BILLING_STATE.UNPAID;
+    else if (env.stripe.requireForOrganisations) state = BILLING_STATE.ENDED;
     return {
-      state: required ? BILLING_STATE.ENDED : BILLING_STATE.NONE,
-      active: !required,
+      state,
+      active: state === BILLING_STATE.NONE,
       subscriptionId: null,
       status: null,
       periodEnd: null,
@@ -103,17 +106,22 @@ export async function statusForId(orgId) {
 }
 
 /** The refusal sent to anyone in a suspended organisation. */
-export function suspendedError(isAdmin) {
-  return new ApiError(
-    403,
-    isAdmin
+export function suspendedError(isAdmin, state) {
+  let message;
+  if (state === BILLING_STATE.UNPAID) {
+    message = isAdmin
+      ? "Your organisation's subscription has not been paid yet. Pay for it from " +
+        "Team → Subscription to start using BioAudit."
+      : "Your organisation's subscription has not been paid yet. Ask your organisation's " +
+        "admin to pay for it.";
+  } else {
+    message = isAdmin
       ? "Your organisation's subscription has ended, so its accounts are suspended. " +
-          "Renew the subscription to restore access for everyone."
+        "Renew the subscription to restore access for everyone."
       : "Your organisation's subscription has ended, so its accounts are suspended. " +
-          "Ask your organisation's admin to renew it.",
-    undefined,
-    SUSPENDED_CODE
-  );
+        "Ask your organisation's admin to renew it.";
+  }
+  return new ApiError(403, message, undefined, SUSPENDED_CODE);
 }
 
 // --- Acting on the subscription through Stripe --------------------------------
@@ -192,26 +200,77 @@ export async function billingPortalUrl(org) {
   return session.url;
 }
 
-/** A Stripe checkout link that starts a new yearly subscription for a lapsed organisation. */
+/**
+ * A Stripe checkout link that starts a yearly subscription: the first payment of an
+ * organisation signed up in the app, or a new year for a lapsed one.
+ */
 export async function renewalCheckoutUrl(org) {
   if (!env.stripe.priceId) {
     throw ApiError.unavailable(
-      "Renewing from the app is not set up yet. Renew on the BioAudit website instead."
+      "Paying from the app is not set up yet. Pay on the BioAudit website instead."
     );
   }
   const current = await statusFor(org);
   if (current.active && current.state !== BILLING_STATE.NONE) {
     throw ApiError.conflict("The subscription is still running, so there is nothing to renew.");
   }
-  const session = await stripe("checkout/sessions", {
+  const customer = await customers().doc(org.ownerId).get();
+  const url = customer.exists && customer.data().stripeId
+    ? (await stripe("checkout/sessions", {
+        mode: "subscription",
+        customer: customer.data().stripeId,
+        "line_items[0][price]": env.stripe.priceId,
+        "line_items[0][quantity]": "1",
+        "subscription_data[metadata][organisationId]": org.id,
+        success_url: env.stripe.returnUrl,
+        cancel_url: env.stripe.returnUrl,
+      })).url
+    : await extensionCheckoutUrl(org);
+  clearCache(org.id);
+  return url;
+}
+
+// How long to wait for the extension to answer a checkout request. Its function can
+// take several seconds to start when it has not run for a while.
+const EXTENSION_WAIT_MS = 30_000;
+
+/**
+ * Checkout for an owner who is not a Stripe customer yet, the usual case straight after
+ * signing up in the app. The request goes through the extension, the same way the
+ * website's checkout does, so the extension creates the customer and links it to the
+ * account. Its webhook can then record the subscription under customers/{uid}.
+ */
+async function extensionCheckoutUrl(org) {
+  const ref = await customers().doc(org.ownerId).collection("checkout_sessions").add({
     mode: "subscription",
-    customer: await stripeCustomerId(org),
-    "line_items[0][price]": env.stripe.priceId,
-    "line_items[0][quantity]": "1",
-    "subscription_data[metadata][organisationId]": org.id,
+    price: env.stripe.priceId,
     success_url: env.stripe.returnUrl,
     cancel_url: env.stripe.returnUrl,
+    metadata: { organisationId: org.id },
+    createdByApi: FieldValue.serverTimestamp(),
   });
-  clearCache(org.id);
+  const session = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      stop();
+      reject(ApiError.unavailable("The payment page took too long to open. Try again shortly."));
+    }, EXTENSION_WAIT_MS);
+    const stop = ref.onSnapshot(
+      (snap) => {
+        const data = snap.data() ?? {};
+        if (!data.url && !data.error) return;
+        clearTimeout(timer);
+        stop();
+        resolve(data);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+  if (session.error) {
+    console.error("[stripe] extension checkout failed", session.error.message);
+    throw ApiError.unavailable("The payment provider could not complete that. Try again shortly.");
+  }
   return session.url;
 }

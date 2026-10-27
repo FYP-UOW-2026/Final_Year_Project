@@ -259,6 +259,8 @@ router.post(
       name: req.body.organisationName,
       ownerId: profile.uid,
       solo: req.body.solo,
+      // Signing up here starts the yearly subscription: the admin pays before use.
+      billingRequired: env.stripe.billsNewOrganisations,
     });
 
     // The organisation id only exists once the organisation has been created, so the
