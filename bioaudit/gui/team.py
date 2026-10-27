@@ -162,6 +162,8 @@ def make_team_tab(parent_window, palette: dict):
             self.tabs.addTab(self._invitations_tab(), "Invitations")
             self.tabs.addTab(self._flags_tab(), "Flagged runs")
             self.tabs.addTab(self._audit_tab(), "Activity log")
+            self._subscription_index = self.tabs.addTab(
+                self._subscription_tab(), "Subscription")
             self.tabs.hide()
             layout.addWidget(self.tabs, 1)
 
@@ -209,6 +211,17 @@ def make_team_tab(parent_window, palette: dict):
                         f"{org['memberCount']} member(s)"
                         f"{' · you are the owner' if org.get('isOwner') else ''}</span>"
                     )
+                subscription = (org or {}).get("subscription") or {}
+                self._show_subscription(subscription)
+                # While suspended the server refuses everything but the subscription, so
+                # the other tabs are locked rather than left to fail one by one.
+                suspended = subscription.get("active") is False
+                for i in range(self.tabs.count()):
+                    if i != self._subscription_index:
+                        self.tabs.setTabEnabled(i, not suspended)
+                if suspended:
+                    self.tabs.setCurrentIndex(self._subscription_index)
+                    return
                 self._load_members()
                 self._load_invitations()
                 self._load_flags()
@@ -820,4 +833,145 @@ def make_team_tab(parent_window, palette: dict):
                 rows.append([format_when(e.get("at")), e.get("action", ""), by, affected, detail])
             _fill(self.audit_table, rows)
 
+        # =============== subscription ================================
+        def _subscription_tab(self) -> QWidget:
+            w = QWidget()
+            layout = QVBoxLayout(w)
+            self.sub_status = QLabel("")
+            self.sub_status.setTextFormat(Qt.RichText)
+            self.sub_status.setWordWrap(True)
+            layout.addWidget(self.sub_status)
+
+            buttons = QHBoxLayout()
+            self.sub_cancel_btn = QPushButton("Cancel subscription…")
+            self.sub_cancel_btn.clicked.connect(self._cancel_subscription)
+            self.sub_resume_btn = QPushButton("Keep subscription")
+            self.sub_resume_btn.clicked.connect(self._resume_subscription)
+            self.sub_renew_btn = QPushButton("Renew subscription…")
+            self.sub_renew_btn.clicked.connect(self._renew_subscription)
+            self.sub_portal_btn = QPushButton("Manage billing online")
+            self.sub_portal_btn.setToolTip(
+                "Opens Stripe's billing page, where you can also cancel or change the card.")
+            self.sub_portal_btn.clicked.connect(self._open_billing_portal)
+            for b in (self.sub_cancel_btn, self.sub_resume_btn, self.sub_renew_btn,
+                      self.sub_portal_btn):
+                buttons.addWidget(b)
+            buttons.addStretch(1)
+            layout.addLayout(buttons)
+
+            note = QLabel(
+                "One subscription covers the whole organisation: you and every member share "
+                "the same paid year. It renews and is charged automatically each year until "
+                "you cancel. Cancelling keeps everyone's access until the end of the year "
+                "already paid; after that, all accounts in the organisation are suspended "
+                "until the subscription is renewed. Only admins can cancel."
+            )
+            note.setObjectName("hint")
+            note.setWordWrap(True)
+            layout.addWidget(note)
+            layout.addStretch(1)
+            return w
+
+        def _show_subscription(self, sub: dict) -> None:
+            state = sub.get("state") or "none"
+            when = _date(sub.get("periodEnd"))
+            text = {
+                "active": f"<b>Active.</b> Renews automatically on <b>{when}</b>, when the "
+                          f"organisation is charged for another year.",
+                "cancelling": f"<b>Cancelled.</b> Everyone keeps access until <b>{when}</b>. "
+                              f"After that you and every member are suspended until the "
+                              f"subscription is renewed.",
+                "ended": f"<b style='color:{SEVERITY_COLOURS['high']}'>Ended{' on ' + when if when != 'unknown' else ''}.</b> "
+                         f"You and every member of this organisation are suspended until "
+                         f"the subscription is renewed.",
+                "none": "<b>No subscription on record.</b> This organisation was not set up "
+                        "through the website's checkout, so it is not billed.",
+            }.get(state, f"Subscription state: {state}")
+            self.sub_status.setText(text)
+            self.sub_cancel_btn.setVisible(state == "active")
+            self.sub_resume_btn.setVisible(state == "cancelling")
+            self.sub_renew_btn.setVisible(state == "ended")
+            self.sub_portal_btn.setVisible(state != "none")
+
+        def _cancel_subscription(self) -> None:
+            try:
+                sub = self.client.org_subscription(self.org_id)
+            except ApiClientError as exc:
+                return self._fail("Could not load the subscription", exc)
+            when = _date(sub.get("periodEnd"))
+            if QMessageBox.question(
+                self, "Cancel subscription",
+                f"Cancel your organisation's subscription?\n\n"
+                f"It will not renew, and you will not be charged again. You and every "
+                f"member keep access until {when}. After that, all accounts in the "
+                f"organisation are suspended until the subscription is renewed.\n\n"
+                f"You can undo this any time before {when}.",
+            ) != QMessageBox.Yes:
+                return
+            reason, ok = QInputDialog.getText(
+                self, "Cancel subscription", "Reason (optional):")
+            if not ok:
+                return
+            try:
+                self._busy(True)
+                result = self.client.cancel_org_subscription(self.org_id, reason.strip() or None)
+            except ApiClientError as exc:
+                return self._fail("Could not cancel the subscription", exc)
+            finally:
+                self._busy(False)
+            QMessageBox.information(self, "Subscription cancelled", result.get("message", ""))
+            self.reload()
+
+        def _resume_subscription(self) -> None:
+            try:
+                self._busy(True)
+                result = self.client.resume_org_subscription(self.org_id)
+            except ApiClientError as exc:
+                return self._fail("Could not keep the subscription", exc)
+            finally:
+                self._busy(False)
+            QMessageBox.information(self, "Subscription kept", result.get("message", ""))
+            self.reload()
+
+        def _open_link(self, fetch, title: str, after: str) -> bool:
+            """Fetch a Stripe link from the server and open it in the browser."""
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+            try:
+                self._busy(True)
+                url = fetch(self.org_id)
+            except ApiClientError as exc:
+                self._fail(title, exc)
+                return False
+            finally:
+                self._busy(False)
+            QDesktopServices.openUrl(QUrl(url))
+            self._status(after)
+            return True
+
+        def _open_billing_portal(self) -> None:
+            self._open_link(self.client.billing_portal_url, "Could not open billing",
+                            "Opened the billing page in your browser.")
+
+        def _renew_subscription(self) -> None:
+            if not self._open_link(
+                    self.client.renewal_url, "Could not start the renewal",
+                    "Opened the payment page in your browser. After paying, press Refresh."):
+                return
+            QMessageBox.information(
+                self, "Renew subscription",
+                "The payment page has opened in your browser. Once payment goes through, "
+                "press Refresh here: access returns for you and every member.")
+
     return TeamTab()
+
+
+def _date(iso: Optional[str]) -> str:
+    """'17 Oct 2027' from an ISO timestamp, or 'unknown'."""
+    if not iso:
+        return "unknown"
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().strftime("%d %b %Y")
+    except ValueError:
+        return "unknown"

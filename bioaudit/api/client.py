@@ -37,15 +37,26 @@ DEFAULT_TIMEOUT = 30.0
 EXPLAIN_TIMEOUT = 90.0
 
 
+# The server refuses everyone in an organisation whose paid year ended without renewal.
+SUBSCRIPTION_ENDED_CODE = "ORGANISATION_SUBSCRIPTION_ENDED"
+
+
 class ApiClientError(RuntimeError):
     """A request failed. `message` is safe to show the user as-is."""
 
     def __init__(self, message: str, status: Optional[int] = None,
-                 details: Optional[list] = None):
+                 details: Optional[list] = None, code: Optional[str] = None):
         super().__init__(message)
         self.message = message
         self.status = status
         self.details = details or []
+        # The server's reason code, for the refusals the app must act on rather than
+        # just show, such as SUBSCRIPTION_ENDED_CODE.
+        self.code = code
+
+    @property
+    def organisation_suspended(self) -> bool:
+        return self.code == SUBSCRIPTION_ENDED_CODE
 
     def __str__(self) -> str:  # pragma: no cover - trivial
         if self.details:
@@ -222,6 +233,7 @@ class ApiClient:
 
             message = parsed.get("message") or f"Request failed with status {exc.code}."
             details = parsed.get("details")
+            reason = parsed.get("code")
 
             # A revoked or expired session gets one automatic retry. This happens
             # legitimately whenever the tier or role changes, since the server revokes
@@ -237,7 +249,7 @@ class ApiClient:
 
             if exc.code == 401:
                 raise AuthRequiredError(message, exc.code, details) from exc
-            raise ApiClientError(message, exc.code, details) from exc
+            raise ApiClientError(message, exc.code, details, reason) from exc
 
         except urllib.error.URLError as exc:
             raise ApiClientError(
@@ -539,7 +551,35 @@ class ApiClient:
                              body={"token": invitation_token})
 
     def my_organisation(self) -> Optional[dict]:
+        """The caller's organisation, including its shared `subscription` summary."""
         return self._request("GET", "/organisations/mine").get("organisation")
+
+    # --- the organisation's yearly subscription (admin only) ---------------
+
+    def org_subscription(self, org_id: str) -> dict:
+        """{state: none|active|cancelling|ended, active, periodEnd}."""
+        return self._request("GET", f"/organisations/{org_id}/subscription")["subscription"]
+
+    def cancel_org_subscription(self, org_id: str, reason: Optional[str] = None) -> dict:
+        """Stop the yearly renewal. Access continues until the end of the paid year."""
+        body = {"confirm": "CANCEL"}
+        if reason:
+            body["reason"] = reason
+        return self._request("POST", f"/organisations/{org_id}/subscription/cancel", body=body)
+
+    def resume_org_subscription(self, org_id: str) -> dict:
+        """Undo a cancellation before the paid year ends."""
+        return self._request("POST", f"/organisations/{org_id}/subscription/resume", body={})
+
+    def billing_portal_url(self, org_id: str) -> str:
+        """A link to Stripe's billing page, to manage or cancel the subscription online."""
+        return self._request("POST", f"/organisations/{org_id}/subscription/portal",
+                             body={})["url"]
+
+    def renewal_url(self, org_id: str) -> str:
+        """A Stripe checkout link that pays for a new year once the old one has ended."""
+        return self._request("POST", f"/organisations/{org_id}/subscription/renew",
+                             body={})["url"]
 
     def list_members(self, org_id: str) -> list[dict]:
         return self._request("GET", f"/organisations/{org_id}/members")["members"]

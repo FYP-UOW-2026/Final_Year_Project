@@ -3,11 +3,18 @@
  * and let the central error handler turn it into a response.
  */
 export class ApiError extends Error {
-  constructor(status, message, details = undefined) {
+  constructor(status, message, details = undefined, code = undefined) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.details = details;
+    // A stable machine-readable reason, for the few refusals a client must act on
+    // rather than just display (such as an organisation whose subscription ended).
+    this.code = code;
+  }
+
+  static unavailable(message) {
+    return new ApiError(503, message);
   }
 
   static badRequest(message, details) {

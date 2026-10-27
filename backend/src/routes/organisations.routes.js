@@ -29,6 +29,7 @@ import {
 } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import * as audit from "../services/audit.service.js";
+import * as billing from "../services/billing.service.js";
 import * as email from "../services/email.service.js";
 import * as organisations from "../services/organisations.service.js";
 import * as scansService from "../services/scans.service.js";
@@ -91,14 +92,122 @@ router.get(
         memberCount: organisation.memberIds.length,
         isOwner: organisation.ownerId === req.user.uid,
         yourRole: req.profile.role,
+        // Everyone in the organisation shares one paid year, so every member sees it.
+        subscription: publicSubscription(await billing.statusFor(organisation)),
       },
     });
   })
 );
 
+/** The subscription as members see it: its state and dates, not Stripe's ids. */
+function publicSubscription(status) {
+  return { state: status.state, active: status.active, periodEnd: status.periodEnd };
+}
+
 // --- Admin only ------------------------------------------------------------
 
 const adminOnly = [requireAuth, loadProfile, requireAdmin, requireOwnOrganisation];
+
+// --- The organisation's yearly subscription (admin only) -----------------------
+//
+// These stay reachable while the organisation is suspended (see loadProfile), since
+// renewing is the only way out of a suspension.
+
+const orgParams = validate({ params: z.object({ orgId: z.string().min(1) }) });
+
+/** GET /api/organisations/:orgId/subscription -- the shared paid year and its state */
+router.get(
+  "/:orgId/subscription",
+  adminOnly,
+  orgParams,
+  asyncHandler(async (req, res) => {
+    const org = await organisations.getOrganisation(req.params.orgId);
+    res.json({ subscription: publicSubscription(await billing.statusFor(org)) });
+  })
+);
+
+/**
+ * POST /api/organisations/:orgId/subscription/cancel -- Cancel subscription
+ *
+ * Stops the automatic yearly renewal. The year already paid for runs to its end; when it
+ * ends, the admin and every member are suspended until the subscription is renewed.
+ */
+router.post(
+  "/:orgId/subscription/cancel",
+  adminOnly,
+  validate({
+    params: z.object({ orgId: z.string().min(1) }),
+    body: z.object({
+      confirm: z.literal("CANCEL", {
+        errorMap: () => ({ message: "Send confirm: 'CANCEL' to cancel the subscription." }),
+      }),
+      reason: z.string().trim().max(500).optional(),
+    }),
+  }),
+  asyncHandler(async (req, res) => {
+    const org = await organisations.getOrganisation(req.params.orgId);
+    const status = await billing.setCancelAtPeriodEnd(org, true);
+
+    await audit.record({
+      action: audit.AUDIT_ACTIONS.SUBSCRIPTION_CANCELLED,
+      actorId: req.user.uid,
+      organisationId: org.id,
+      metadata: { endsOn: status.periodEnd, reason: req.body.reason ?? null },
+    });
+
+    res.json({
+      subscription: publicSubscription(status),
+      message:
+        "The subscription will not renew. Everyone keeps access until the end of the paid " +
+        "year; after that, the admin and all members are suspended until it is renewed.",
+    });
+  })
+);
+
+/** POST /api/organisations/:orgId/subscription/resume -- undo a cancellation in time */
+router.post(
+  "/:orgId/subscription/resume",
+  adminOnly,
+  orgParams,
+  asyncHandler(async (req, res) => {
+    const org = await organisations.getOrganisation(req.params.orgId);
+    const status = await billing.setCancelAtPeriodEnd(org, false);
+
+    await audit.record({
+      action: audit.AUDIT_ACTIONS.SUBSCRIPTION_RESUMED,
+      actorId: req.user.uid,
+      organisationId: org.id,
+      metadata: { renewsOn: status.periodEnd },
+    });
+
+    res.json({
+      subscription: publicSubscription(status),
+      message: "The subscription will renew automatically at the end of the paid year.",
+    });
+  })
+);
+
+/** POST /api/organisations/:orgId/subscription/portal -- Stripe's billing page */
+router.post(
+  "/:orgId/subscription/portal",
+  adminOnly,
+  orgParams,
+  asyncHandler(async (req, res) => {
+    const org = await organisations.getOrganisation(req.params.orgId);
+    res.json({ url: await billing.billingPortalUrl(org) });
+  })
+);
+
+/** POST /api/organisations/:orgId/subscription/renew -- pay again after the year ended */
+router.post(
+  "/:orgId/subscription/renew",
+  adminOnly,
+  orgParams,
+  asyncHandler(async (req, res) => {
+    const org = await organisations.getOrganisation(req.params.orgId);
+    res.json({ url: await billing.renewalCheckoutUrl(org) });
+  })
+);
 
 /** GET /api/organisations/:orgId/members -- View member data (the list) */
 router.get(

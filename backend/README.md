@@ -273,6 +273,37 @@ against the Firebase emulators, so tests never send real mail.
 | DELETE | `/organisations/:orgId/members/:uid/account` | Admin: Delete member account |
 | GET | `/organisations/:orgId/audit` | The record of admin actions |
 
+### Organisation subscription
+
+Organisations pay one yearly subscription that covers the admin and every member, so the
+whole organisation shares one paid year and one renewal date. Payment runs through Stripe:
+the website's checkout and the "Run Payments with Stripe" extension, which mirrors each
+subscription into `customers/{ownerUid}/subscriptions`. The API reads that mirror.
+
+| Method | Path | Diagram function |
+|---|---|---|
+| GET | `/organisations/mine` | Any member: includes the shared `subscription` (state, end of the paid year) |
+| GET | `/organisations/:orgId/subscription` | Admin: the subscription's state |
+| POST | `/organisations/:orgId/subscription/cancel` | Admin: Cancel subscription (`confirm: "CANCEL"`) |
+| POST | `/organisations/:orgId/subscription/resume` | Admin: undo a cancellation before the year ends |
+| POST | `/organisations/:orgId/subscription/portal` | Admin: link to Stripe's billing page (manage or cancel online) |
+| POST | `/organisations/:orgId/subscription/renew` | Admin: Stripe checkout link to pay again after the year ended |
+
+- **Auto-renewal.** The subscription renews and is charged automatically every year until an
+  admin cancels it.
+- **Cancelling** stops the renewal (Stripe's `cancel_at_period_end`). Everyone keeps access
+  until the end of the year already paid.
+- **Suspension.** When the paid year ends after a cancellation, Stripe marks the subscription
+  `canceled` and every account in the organisation is refused with error code
+  `ORGANISATION_SUBSCRIPTION_ENDED`. Members can still read their profile and
+  `/organisations/mine`; admins can also reach the subscription routes, to renew. Paying again
+  restores access for everyone.
+- **Only admins** can cancel, resume or renew. Students are not part of this subscription.
+- An organisation with no Stripe subscription at all (created in the app, or before billing)
+  keeps working unless `REQUIRE_ORG_SUBSCRIPTION=true`.
+- Cancel, resume, billing page and renew need `STRIPE_SECRET_KEY`; renew also needs
+  `STRIPE_PRICE_ID`. See `.env.example`.
+
 ## Example: saving a scan
 
 ```bash

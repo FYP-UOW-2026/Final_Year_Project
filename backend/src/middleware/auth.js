@@ -11,6 +11,7 @@
  */
 import { auth, db } from "../config/firebase.js";
 import { COLLECTIONS, ROLES, TIERS, tierFor } from "../constants/index.js";
+import * as billing from "../services/billing.service.js";
 import * as studentVerification from "../services/studentVerification.service.js";
 import { ApiError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -71,8 +72,38 @@ export const loadProfile = asyncHandler(async (req, res, next) => {
   req.user.role = profile.role || req.user.role;
   req.user.organisationId = profile.organisationId ?? req.user.organisationId;
   req.user.tier = tierFor(req.user);
+  await refuseSuspendedOrganisation(req);
   next();
 });
+
+/**
+ * What a suspended organisation can still reach: enough to see why, and for an admin,
+ * enough to pay. Everything else is refused until the subscription is renewed.
+ */
+function allowedWhileSuspended(req) {
+  const path = `${req.baseUrl}${req.path}`.replace(/\/+$/, "");
+  if (req.method === "GET" && (path === "/api/users/me" || path === "/api/organisations/mine")) {
+    return true;
+  }
+  return (
+    req.user.role === ROLES.ADMIN &&
+    /^\/api\/organisations\/[^/]+\/subscription(\/[a-z-]+)?$/.test(path)
+  );
+}
+
+/**
+ * Suspend everyone in an organisation whose paid year has ended without renewal.
+ *
+ * Checked here rather than at sign-in, so it also reaches sessions that were already
+ * open when the year ran out. Students are not in an organisation and never reach it.
+ */
+async function refuseSuspendedOrganisation(req) {
+  if (!req.user.organisationId || allowedWhileSuspended(req)) return;
+  const status = await billing.statusForId(req.user.organisationId);
+  if (status && !status.active) {
+    throw billing.suspendedError(req.user.role === ROLES.ADMIN);
+  }
+}
 
 /** Gate for team-only features: Compare scan results, Export scan report. */
 export const requireTeam = asyncHandler(async (req, res, next) => {

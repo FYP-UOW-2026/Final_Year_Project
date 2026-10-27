@@ -227,6 +227,32 @@ export const env = {
     },
   },
 
+  /**
+   * The yearly organisation subscription, sold through Stripe.
+   *
+   * Checkout and renewals already run through the "Run Payments with Stripe" extension,
+   * which records each subscription under customers/{uid}/subscriptions. Reading those
+   * needs nothing here. The key is only for acting on a subscription from the API:
+   * cancelling or keeping it, opening Stripe's billing page, and starting a renewal.
+   * Use the same secret key the extension was installed with.
+   */
+  stripe: {
+    secretKey: optional("STRIPE_SECRET_KEY"),
+    // Overridable so the integration tests can point at a local stand-in.
+    apiBase: optional("STRIPE_API_BASE", "https://api.stripe.com"),
+    // The yearly price a lapsed organisation is sent to pay again.
+    priceId: optional("STRIPE_PRICE_ID"),
+    // Where Stripe's pages send the user back to when they are done.
+    returnUrl: optional("STRIPE_RETURN_URL", "https://bioaudit.me"),
+    // An organisation with no Stripe subscription at all (one created in the app, or
+    // before billing existed) keeps working unless this is set. One that has ever had a
+    // subscription always follows it.
+    requireForOrganisations: optional("REQUIRE_ORG_SUBSCRIPTION") === "true",
+    get enabled() {
+      return Boolean(this.secretKey);
+    },
+  },
+
   limits: {
     freeHistory: int("FREE_HISTORY_LIMIT", 10),
     // History kept by a student account (a team account keeps everything), and its
