@@ -57,11 +57,15 @@ await new Promise((resolve) => fakeStripe.listen(0, "127.0.0.1", resolve));
 process.env.STRIPE_SECRET_KEY = "sk_test_fake";
 process.env.STRIPE_API_BASE = `http://127.0.0.1:${fakeStripe.address().port}`;
 process.env.STRIPE_PRICE_ID = "price_yearly_test";
+// Off for the other groups, which register organisations and use them straight away.
+// The subscription group turns it on to test paying at sign-up.
+process.env.BILL_NEW_ORGANISATIONS = "false";
 
 const { createApp } = await import("../src/app.js");
 const { db, auth } = await import("../src/config/firebase.js");
 const { hashCode, signupCodeId } = await import("../src/services/studentVerification.service.js");
 const { COLLECTIONS } = await import("../src/constants/index.js");
+const { env } = await import("../src/config/env.js");
 
 const app = createApp();
 const server = app.listen(0);
@@ -1301,6 +1305,56 @@ await check("the admin of a suspended organisation can renew, which restores acc
   });
   const member = await call("GET", "/scans", { token: subMemberToken });
   assert.equal(member.status, 200, JSON.stringify(member.body));
+});
+
+await check("an organisation signed up in the app is locked until its first payment", async () => {
+  env.stripe.billNewOrganisations = true;
+  try {
+    const email = `payer-${unique()}@example.com`;
+    const reg = await call("POST", "/auth/register-admin", {
+      body: { email, password: "payer-password-1", organisationName: "Paying Ltd", tosAccepted: true },
+    });
+    assert.equal(reg.status, 201, JSON.stringify(reg.body));
+    const token = reg.body.session.idToken;
+    const newOrg = reg.body.organisation.id;
+    const uid = reg.body.user.id;
+
+    const mine = await call("GET", "/organisations/mine", { token });
+    assert.equal(mine.body.organisation.subscription.state, "unpaid");
+    const members = await call("GET", `/organisations/${newOrg}/members`, { token });
+    assert.equal(members.status, 403);
+    assert.equal(members.body.error.code, "ORGANISATION_SUBSCRIPTION_ENDED");
+    assert.match(members.body.error.message, /not been paid/);
+
+    // The owner is not a Stripe customer yet, so checkout goes through the extension:
+    // a checkout_sessions request it answers with the payment page's url. Stood in here.
+    const sessions = db.collection("customers").doc(uid).collection("checkout_sessions");
+    const stop = sessions.onSnapshot((snap) => {
+      for (const change of snap.docChanges()) {
+        if (change.type === "added" && !change.doc.data().url) {
+          change.doc.ref.update({ url: "https://checkout.stripe.test/first" });
+        }
+      }
+    });
+    const pay = await call("POST", `/organisations/${newOrg}/subscription/renew`, { token });
+    stop();
+    assert.equal(pay.status, 200, JSON.stringify(pay.body));
+    assert.equal(pay.body.url, "https://checkout.stripe.test/first");
+    const [request] = (await sessions.get()).docs.map((d) => d.data());
+    assert.equal(request.price, "price_yearly_test");
+    assert.equal(request.mode, "subscription");
+
+    await db.collection("customers").doc(uid).collection("subscriptions").doc("sub_first").set({
+      status: "active",
+      cancel_at_period_end: false,
+      created: new Date(),
+      current_period_end: new Date(Date.now() + 365 * 24 * 3600 * 1000),
+    });
+    const after = await call("GET", `/organisations/${newOrg}/members`, { token });
+    assert.equal(after.status, 200, JSON.stringify(after.body));
+  } finally {
+    env.stripe.billNewOrganisations = false;
+  }
 });
 
 group("Account deletion");

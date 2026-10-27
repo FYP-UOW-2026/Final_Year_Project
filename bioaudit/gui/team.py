@@ -884,14 +884,19 @@ def make_team_tab(parent_window, palette: dict):
                 "ended": f"<b style='color:{SEVERITY_COLOURS['high']}'>Ended{' on ' + when if when != 'unknown' else ''}.</b> "
                          f"You and every member of this organisation are suspended until "
                          f"the subscription is renewed.",
+                "unpaid": f"<b style='color:{SEVERITY_COLOURS['high']}'>Payment needed.</b> "
+                          f"Your organisation's yearly subscription has not been paid yet. "
+                          f"Pay for it to start using BioAudit and invite your team.",
                 "none": "<b>No subscription on record.</b> This organisation was not set up "
                         "through the website's checkout, so it is not billed.",
             }.get(state, f"Subscription state: {state}")
             self.sub_status.setText(text)
             self.sub_cancel_btn.setVisible(state == "active")
             self.sub_resume_btn.setVisible(state == "cancelling")
-            self.sub_renew_btn.setVisible(state == "ended")
-            self.sub_portal_btn.setVisible(state != "none")
+            self.sub_renew_btn.setText("Pay for subscription…" if state == "unpaid"
+                                       else "Renew subscription…")
+            self.sub_renew_btn.setVisible(state in ("ended", "unpaid"))
+            self.sub_portal_btn.setVisible(state not in ("none", "unpaid"))
 
         def _cancel_subscription(self) -> None:
             try:
@@ -959,9 +964,9 @@ def make_team_tab(parent_window, palette: dict):
                     "Opened the payment page in your browser. After paying, press Refresh."):
                 return
             QMessageBox.information(
-                self, "Renew subscription",
+                self, "Payment page opened",
                 "The payment page has opened in your browser. Once payment goes through, "
-                "press Refresh here: access returns for you and every member.")
+                "press Refresh here: access opens for you and every member.")
 
     return TeamTab()
 

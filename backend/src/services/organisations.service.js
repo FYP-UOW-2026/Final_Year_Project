@@ -24,11 +24,14 @@ const invitations = () => db.collection(COLLECTIONS.INVITATIONS);
 const flags = () => db.collection(COLLECTIONS.FLAGS);
 const users = () => db.collection(COLLECTIONS.USERS);
 
-export async function createOrganisation({ name, ownerId, solo = false }) {
+export async function createOrganisation({ name, ownerId, solo = false, billingRequired = false }) {
   const doc = {
     name,
     ownerId,
     solo: Boolean(solo),
+    // Locked until its first payment (see billing.service). Organisations from before
+    // billing, or with this unset, keep working without a subscription.
+    ...(billingRequired ? { billingRequired: true } : {}),
     adminIds: [ownerId],
     memberIds: [ownerId],
     createdAt: FieldValue.serverTimestamp(),

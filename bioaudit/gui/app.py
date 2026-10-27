@@ -667,7 +667,23 @@ def run(cfg: Config | None = None) -> int:
             self._suspension_shown_for = account.id
 
             from PySide6.QtCore import QTimer
-            if account.is_admin:
+            if subscription.get("state") == "unpaid":
+                # Just signed up in the app: the first year is paid before anything opens.
+                if account.is_admin:
+                    self.tabs.setCurrentIndex(self._team_tab_index)
+                    if QMessageBox.question(
+                            self, "Pay for your subscription",
+                            "Your organisation is set up. One yearly subscription covers you "
+                            "and everyone you invite, and it renews automatically until you "
+                            "cancel.\n\nOpen the payment page now?") == QMessageBox.Yes:
+                        self.team_tab._renew_subscription()
+                else:
+                    QMessageBox.warning(
+                        self, "Subscription not paid",
+                        "Your organisation's subscription has not been paid yet.\n\nAsk your "
+                        "organisation's admin to pay for it. You will be signed out now.")
+                    QTimer.singleShot(0, self._sign_out)
+            elif account.is_admin:
                 QMessageBox.warning(
                     self, "Subscription ended",
                     "Your organisation's subscription has ended, so your account and every "
