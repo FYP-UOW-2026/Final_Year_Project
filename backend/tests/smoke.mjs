@@ -218,8 +218,10 @@ await check("the code is in the subject, the text and the HTML", () => {
   });
   assert.match(mail.subject, /^048213 /);
   assert.match(mail.text, /048213/);
-  // The HTML puts a hair space between the digits for readability.
-  assert.ok(mail.html.replaceAll("&#8202;", "").includes("048213"));
+  // Unbroken, so highlighting and copying it gives exactly the code. Spacing between
+  // the digits is styling only; characters there get copied along with them.
+  assert.ok(mail.html.includes(">048213<"), "the HTML code must be one unbroken string");
+  assert.ok(!/&#8202;|&#8201;|&nbsp;/.test(mail.html), "no spacing characters in the HTML");
   assert.match(mail.text, /National University of Singapore/);
   assert.match(mail.text, /15 minutes/);
 });

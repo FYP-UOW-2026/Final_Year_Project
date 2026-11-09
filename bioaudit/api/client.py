@@ -299,7 +299,7 @@ class ApiClient:
         if university_id:
             payload["universityId"] = university_id
         if code:
-            payload["code"] = code.strip()
+            payload["code"] = _clean_code(code)
         if invitation_token:
             payload["invitationToken"] = invitation_token.strip()
 
@@ -394,7 +394,7 @@ class ApiClient:
     def verify_student_code(self, code: str) -> Account:
         """Confirm the university email with the code from the email."""
         data = self._request("POST", "/users/me/student-verification/verify",
-                             body={"code": code.strip()})
+                             body={"code": _clean_code(code)})
         self.account = Account.from_payload(data["user"])
         return self.account
 
@@ -675,3 +675,8 @@ def _iso(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat().replace(
         "+00:00", "Z"
     )
+
+
+def _clean_code(code: str) -> str:
+    """A verification code without the spaces or dashes copying it can bring along."""
+    return "".join(code.split()).replace("-", "")

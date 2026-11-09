@@ -13,7 +13,7 @@ import { z } from "zod";
 import { env } from "../config/env.js";
 
 import { loadProfile, requireAuth } from "../middleware/auth.js";
-import { validate } from "../middleware/validate.js";
+import { validate, verificationCodeSchema } from "../middleware/validate.js";
 import * as email from "../services/email.service.js";
 import * as firebaseAuth from "../services/firebaseAuth.service.js";
 import * as organisations from "../services/organisations.service.js";
@@ -141,10 +141,7 @@ router.post(
   verificationLimiter,
   validate({
     body: z.object({
-      code: z
-        .string()
-        .trim()
-        .regex(/^\d{6}$/, "Enter the six-digit code from the email."),
+      code: verificationCodeSchema,
     }),
   }),
   asyncHandler(async (req, res) => {

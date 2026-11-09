@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..api import ApiClient, ApiClientError
+from .formatting import tidy_code
 from .theme import DARK, ERROR_TEXT, SUCCESS_TEXT
 
 
@@ -402,7 +403,10 @@ def show_student_verification_dialog(parent, client: ApiClient) -> DialogResult:
 
             self.code_edit = QLineEdit()
             self.code_edit.setPlaceholderText("123456")
-            self.code_edit.setMaxLength(6)
+            # No six-character limit: it would cut a pasted "1 2 3 4 5 6" down to "1 2 3"
+            # before it could be tidied to its digits.
+            self.code_edit.textEdited.connect(
+                lambda text: text != tidy_code(text) and self.code_edit.setText(tidy_code(text)))
             self.code_edit.setAlignment(Qt.AlignCenter)
             self.code_edit.setStyleSheet("font-size: 20px; letter-spacing: 6px;")
             self.code_edit.returnPressed.connect(self._verify)

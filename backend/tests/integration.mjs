@@ -225,6 +225,17 @@ await check("registering with the emailed code creates a verified account and a 
   assert.ok(!code.exists, "a used sign-up code should be deleted");
 });
 
+await check("a code pasted with spaces in it still signs the student up", async () => {
+  const email = `pasted-${unique()}@example.ac.uk`;
+  await call("POST", "/auth/register/send-code", { body: { email } });
+  await plantSignupCode(email);
+  const spaced = KNOWN_CODE.split("").join(" ");
+  const { status, body } = await call("POST", "/auth/register", {
+    body: { email, password: "pasted-password-1", code: ` ${spaced} ` },
+  });
+  assert.equal(status, 201, JSON.stringify(body));
+});
+
 await check("the chosen university is kept on the new account", async () => {
   const email = `dev-${unique()}@ox.ac.uk`;
   const { status, body } = await registerStudent({

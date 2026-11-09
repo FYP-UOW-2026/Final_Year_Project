@@ -14,7 +14,7 @@ import { env } from "../config/env.js";
 import { auth } from "../config/firebase.js";
 import { ROLES, TOS_VERSION } from "../constants/index.js";
 import { requireAuth } from "../middleware/auth.js";
-import { validate } from "../middleware/validate.js";
+import { validate, verificationCodeSchema } from "../middleware/validate.js";
 import * as audit from "../services/audit.service.js";
 import * as firebaseAuth from "../services/firebaseAuth.service.js";
 import * as organisations from "../services/organisations.service.js";
@@ -140,11 +140,7 @@ router.post(
       tosAccepted: tosSchema,
       displayName: z.string().trim().min(1).max(80).optional(),
       universityId: universityIdSchema,
-      code: z
-        .string()
-        .trim()
-        .regex(/^\d{6}$/, "Enter the six-digit code from the email.")
-        .optional(),
+      code: verificationCodeSchema.optional(),
       invitationToken: z.string().trim().min(16, "That invitation link is not valid.").optional(),
     }),
   }),

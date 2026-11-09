@@ -40,3 +40,12 @@ def severity_summary(counts: dict) -> str:
              for name in ("critical", "high", "medium", "low", "info")
              if counts.get(name)]
     return ", ".join(parts) or "no findings"
+
+
+def tidy_code(text: str) -> str:
+    """A pasted verification code reduced to its digits, at most six.
+
+    Copying a code out of an email can bring spaces along ("1 2 3 4 5 6"), or a
+    whole line ("Your code: 123456"). Only the digits matter.
+    """
+    return "".join(ch for ch in text if ch.isdigit())[:6]
