@@ -23,6 +23,7 @@ process.env.GROQ_API_KEY = "groq-test-key";
 
 const { createSession } = await import("../src/services/aiGraph.service.js");
 const knowledgeBase = await import("../src/services/knowledgeBase.js");
+const groq = await import("../src/services/groq.service.js");
 
 const USER = { uid: "user-1", organisationId: null, role: "member" };
 const FINAL = JSON.stringify({ explanation: "Plain words.", mitigation: "Change the flag." });
@@ -143,6 +144,54 @@ await check("tool calls left unanswered when the budget runs out are not sent ba
   const out = await session().explain("Explain this finding.");
   assert.equal(out.result.explanation, "Plain words.");
   assert.ok(requests.length >= 10);
+});
+
+await check("every mode tells the model the exact JSON shape it must reply with", async () => {
+  const expected = {
+    explain: ["explanation", "mitigation", "references"],
+    synthesize: ["summary", "priorities", "findingIndex", "themes"],
+    compare: ["narrative", "regressions", "improvements"],
+    report: ["title", "executiveSummary", "sections", "heading", "body"],
+  };
+  for (const [mode, fields] of Object.entries(expected)) {
+    const requests = standInGroq([{ role: "assistant", content: "Plain prose, not JSON." }]);
+    await session()[mode]("Do the task.").catch(() => {});
+    const system = requests[0].messages[0].content;
+    assert.match(system, /ONLY one JSON object/, mode);
+    for (const field of fields) assert.ok(system.includes(`"${field}"`), `${mode}: ${field}`);
+  }
+});
+
+const ONE_FINDING = { category: "debuggable-release", title: "Debuggable", severity: "high", evidence: "flag set" };
+
+/** Answer each request with the next [status, retry-after] pair, then a good reply. */
+function groqWithLimits(limits) {
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    const next = limits.shift();
+    if (next) {
+      return new Response(JSON.stringify({ error: { message: "Rate limit reached" } }), {
+        status: next[0],
+        headers: { "retry-after": String(next[1]) },
+      });
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { content: FINAL } }] }), { status: 200 });
+  };
+  return () => calls;
+}
+
+await check("a short per-minute rate limit is waited out and retried", async () => {
+  const calls = groqWithLimits([[429, 1]]);
+  const out = await groq.explainFinding(ONE_FINDING);
+  assert.equal(out.explanation, "Plain words.");
+  assert.equal(calls(), 2);
+});
+
+await check("a long wait means the daily limit, so it fails at once", async () => {
+  const calls = groqWithLimits([[429, 3600]]);
+  await assert.rejects(groq.explainFinding(ONE_FINDING), /request limit/);
+  assert.equal(calls(), 1);
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed.`);

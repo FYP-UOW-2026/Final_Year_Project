@@ -25,6 +25,10 @@ import * as knowledgeBase from "./knowledgeBase.js";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
+// The longest wait on a rate limit worth doing inside one request. The per-minute limit
+// clears within this; a longer wait means the daily limit has been used up.
+const MAX_RATE_LIMIT_WAIT_SECONDS = 20;
+
 const SYSTEM_PROMPT = `You explain confirmed Android security findings to app developers who are not security specialists.
 
 Rules:
@@ -130,6 +134,7 @@ async function callGroq(prompt, timeoutMs) {
     const message = body?.error?.message || `HTTP ${response.status}`;
     const err = new Error(message);
     err.status = response.status;
+    err.retryAfterSeconds = Number(response.headers.get("retry-after")) || 0;
     throw err;
   }
 
@@ -140,11 +145,10 @@ async function callGroq(prompt, timeoutMs) {
 /**
  * Generate an explanation and a fix for one finding.
  *
- * A 429 is not retried: it means the account's request quota (per-minute or
- * per-day) is already spent, and trying again a second later gets the same answer
- * every time -- retrying it just spends three round-trips failing the same way
- * instead of one. A 500/502/503, or the request timing out, genuinely can clear up
- * on its own, so those get a few attempts with a growing delay.
+ * A 429 is retried only when Groq says the wait is short, which is the per-minute token
+ * limit a large scan reaches. Otherwise the daily quota is spent, and trying again gets
+ * the same answer every time. A 500/502/503, or the request timing out, genuinely can
+ * clear up on its own, so those get a few attempts with a growing delay.
  */
 export async function explainFinding(finding, { attempts = 3 } = {}) {
   if (!env.groq.enabled) {
@@ -164,6 +168,11 @@ export async function explainFinding(finding, { attempts = 3 } = {}) {
       if (error instanceof ApiError) throw error;
 
       if (error.status === 429) {
+        const wait = error.retryAfterSeconds;
+        if (wait > 0 && wait <= MAX_RATE_LIMIT_WAIT_SECONDS && attempt < attempts) {
+          await new Promise((resolve) => setTimeout(resolve, wait * 1000));
+          continue;
+        }
         throw ApiError.internal(
           "The AI service has hit its request limit for right now. Try again in a " +
             "minute, or in a while if this keeps happening -- that usually means the " +

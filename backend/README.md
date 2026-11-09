@@ -398,8 +398,8 @@ backend/
       users.service.js          accounts and custom claims
       organisations.service.js  membership, invitations, flag and review
       scans.service.js          history, retention, comparison
-      aiGraph.service.js        AI explanations, with redaction (the live path; see below)
-      groq.service.js           unused, left in place as reference for aiGraph.service.js
+      groq.service.js           AI explanations, with redaction (the live path)
+      aiGraph.service.js        LangGraph multi-provider version, not currently called (see below)
       report.service.js         HTML report rendering
       audit.service.js          append-only record of admin actions
     utils/
@@ -411,9 +411,10 @@ backend/
 
 ## AI orchestration (LangGraph)
 
-`src/services/aiGraph.service.js` is a LangGraph rebuild of the explanation layer, wired in
-at `scans.routes.js` and `reports.routes.js` in place of the old single-shot
-`groq.service.js` call, left in the tree unused (`gemini.service.js` has been removed). It routes each
+`src/services/aiGraph.service.js` is a LangGraph rebuild of the explanation layer. It is not
+currently called: `scans.routes.js` and `reports.routes.js` use the single-request
+`groq.service.js`, because the graph's several requests per finding exceed Groq's free limit
+of 8,000 tokens a minute. (`gemini.service.js` has been removed.) It routes each
 call through `aiModelRouter.js`'s fallback chain (Gemini, then Groq, then any configured
 Ollama models, then OpenAI once enabled), trying the next provider when one fails outright.
 

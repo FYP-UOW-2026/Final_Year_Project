@@ -25,7 +25,7 @@ import {
 } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import * as audit from "../services/audit.service.js";
-import { createSession } from "../services/aiGraph.service.js";
+import * as groq from "../services/groq.service.js";
 import * as scansService from "../services/scans.service.js";
 import * as usersService from "../services/users.service.js";
 import { renderScanReportHtml } from "../services/report.service.js";
@@ -211,11 +211,9 @@ router.post(
 
     let result;
     try {
-      const session = createSession({ user: req.user, scanIds: [scan.id] });
-      const graphResult = await session.explain(
-        `Explain finding ${req.params.findingIndex} of scan ${scan.id}.`
-      );
-      result = { ...graphResult.result, model: graphResult.model };
+      // One request with the finding and its guidance in the prompt. The graph's tool loop
+      // takes several per finding, which Groq's free 8,000 tokens a minute cannot sustain.
+      result = await groq.explainFinding(finding);
     } catch (error) {
       await usersService.refundAiExplanation(req.user.uid, req.profile);
       throw error;

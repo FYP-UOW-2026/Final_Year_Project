@@ -226,8 +226,9 @@ function buildTools(state, { user, scanIds }) {
 const TOOL_CALL_BUDGET = 8;
 
 /* ------------------------------------------------------------------------------------ *
- * Modes -- each gets a system prompt (rules from gemini.service.js, shape enforced by
- * responseSchema so the model can't hand back malformed JSON) and a zod validator.
+ * Modes -- each gets a system prompt (rules from gemini.service.js, plus the JSON shape
+ * spelled out with replyShape, since no provider call passes a schema) and a zod validator
+ * for that shape.
  * ------------------------------------------------------------------------------------ */
 
 const BASE_RULES = `You explain confirmed Android security findings to app developers who are not security specialists.
@@ -240,6 +241,11 @@ Rules:
 - Do not invent evidence, file names, or line numbers that are not returned by a tool.
 - Use tools to gather what you need rather than assuming. Call get_guidance for the category before writing a fix.`;
 
+/** The closing instruction for a mode. validateNode rejects anything else as unreadable. */
+const replyShape = (shape) =>
+  `When you have what you need, reply with ONLY one JSON object, with no other text and no code fences, in exactly this shape:
+${shape}`;
+
 /**
  * Prompt registry -- one versioned entry per mode. `promptId`/`promptVersion` are
  * carried through to invoke()'s return value so a caller (or a future experiment
@@ -249,10 +255,12 @@ Rules:
 const MODES = {
   explain: {
     promptId: "explain",
-    promptVersion: "1.0.0",
+    promptVersion: "1.1.0",
     systemPrompt: `${BASE_RULES}
 
-You are explaining ONE finding. Call get_finding_evidence for it and get_guidance for its category, then respond. Keep the explanation to three sentences or fewer, and the fix to four sentences or fewer.`,
+You are explaining ONE finding. Call get_finding_evidence for it and get_guidance for its category, then respond. Keep the explanation to three sentences or fewer, and the fix to four sentences or fewer.
+
+${replyShape('{"explanation": "string", "mitigation": "string", "references": ["string"]}')}`,
     schema: z.object({
       explanation: z.string().min(1),
       mitigation: z.string().min(1),
@@ -261,10 +269,12 @@ You are explaining ONE finding. Call get_finding_evidence for it and get_guidanc
   },
   synthesize: {
     promptId: "synthesize",
-    promptVersion: "1.0.0",
+    promptVersion: "1.1.0",
     systemPrompt: `${BASE_RULES}
 
-You are summarising a whole scan. Call get_scan_summary and list_findings rather than assuming content. Identify which findings compound each other and what to fix first.`,
+You are summarising a whole scan. Call get_scan_summary and list_findings rather than assuming content. Identify which findings compound each other and what to fix first.
+
+${replyShape('{"summary": "string", "priorities": [{"findingIndex": 0, "why": "string"}], "themes": ["string"]}')}`,
     schema: z.object({
       summary: z.string().min(1),
       priorities: z.array(z.object({ findingIndex: z.number().int().min(0), why: z.string().min(1) })),
@@ -273,10 +283,12 @@ You are summarising a whole scan. Call get_scan_summary and list_findings rather
   },
   compare: {
     promptId: "compare",
-    promptVersion: "1.0.0",
+    promptVersion: "1.1.0",
     systemPrompt: `${BASE_RULES}
 
-You are narrating the difference between two scans of the same app. Call compare_scans. Say plainly what got fixed and what regressed.`,
+You are narrating the difference between two scans of the same app. Call compare_scans. Say plainly what got fixed and what regressed.
+
+${replyShape('{"narrative": "string", "regressions": ["string"], "improvements": ["string"]}')}`,
     schema: z.object({
       narrative: z.string().min(1),
       regressions: z.array(z.string()).default([]),
@@ -285,10 +297,12 @@ You are narrating the difference between two scans of the same app. Call compare
   },
   report: {
     promptId: "report",
-    promptVersion: "1.0.0",
+    promptVersion: "1.1.0",
     systemPrompt: `${BASE_RULES}
 
-You are writing a report for one scan. Call get_scan_summary and list_findings, and get_guidance for categories that need it. Produce a short executive summary and a section per theme, not per finding.`,
+You are writing a report for one scan. Call get_scan_summary and list_findings, and get_guidance for categories that need it. Produce a short executive summary and a section per theme, not per finding.
+
+${replyShape('{"title": "string", "executiveSummary": "string", "sections": [{"heading": "string", "body": "string"}]}')}`,
     schema: z.object({
       title: z.string().min(1),
       executiveSummary: z.string().min(1),
