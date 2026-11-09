@@ -432,3 +432,13 @@ def test_error_message_is_human_readable(client: ApiClient):
     assert exc.value.status == 400
     # The GUI shows these directly, so they have to read as sentences.
     assert exc.value.details, "validation errors should list the offending fields"
+
+
+def test_password_reset_request_does_not_reveal_who_has_an_account(client: ApiClient):
+    known = f"pytest-{_unique()}@example.ac.uk"
+    _register_student(client, known)
+    unknown = f"pytest-nobody-{_unique()}@example.ac.uk"
+
+    for_known = ApiClient(BASE_URL).send_password_reset_code(known)
+    for_unknown = ApiClient(BASE_URL).send_password_reset_code(unknown)
+    assert for_known.replace(known, "X") == for_unknown.replace(unknown, "X")

@@ -51,7 +51,7 @@ The first thing you see is a welcome screen with three tabs:
 |---|---|
 | **Create account** | You are new. As a student, pick your university, enter your university email twice and a password, then press **Send code** and type in the six-digit code we email you. Tick **I accept the Terms of Use**, and your account is created once the code checks out. If the address turns out not to exist, the form tells you within a minute or two, so fix it and press **Send again**. Setting up a team instead? Choose **I'm setting up a team**. |
 | **Join with an invite** | An admin sent you an invitation token for their team. Any email address works here. |
-| **Sign in** | You already have an account. |
+| **Sign in** | You already have an account. Forgotten your password? Click **Forgot password?** under the password box, press **Send code**, and enter the six-digit code we email you along with a new password. Resetting signs you out on every other device. |
 
 Tick **"Keep me signed in on this computer"** to skip this next time. It is off by
 default on purpose: staying signed in writes a long-lived token to a file in your home

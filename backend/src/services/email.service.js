@@ -195,6 +195,77 @@ function escapeHtml(value) {
 }
 
 /**
+ * The HTML of an email whose job is to deliver a one-time code.
+ *
+ * The digits stay one unbroken string, spread out by letter-spacing alone, so copying
+ * the code gives exactly the code. Spacing characters between them used to be copied
+ * too, and pasted as "1 2 3 4 5 6". user-select:all lets one click select the whole
+ * code where the mail client honours it. No copy button: mail clients strip scripts.
+ */
+function codeEmailHtml({ heading, lead, code, expiresInMinutes, ignoreNote }) {
+  return `<!doctype html>
+<html><body style="margin:0;padding:0;background:#f3f4f6">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 12px">
+<tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#ffffff;border-radius:12px;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#111827">
+<tr><td style="background:#107C10;border-radius:12px 12px 0 0;padding:18px 28px;color:#ffffff;font-size:18px;font-weight:700">BioAudit</td></tr>
+<tr><td style="padding:28px 28px 8px 28px">
+<p style="margin:0 0 6px 0;font-size:20px;font-weight:700">${escapeHtml(heading)}</p>
+<p style="margin:0;font-size:14px;line-height:21px;color:#4b5563">${escapeHtml(lead)}</p>
+</td></tr>
+<tr><td align="center" style="padding:20px 28px">
+<div style="display:inline-block;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 26px;font-family:Consolas,Menlo,monospace;font-size:34px;font-weight:700;letter-spacing:8px;color:#0c5e0c;user-select:all;-webkit-user-select:all">${escapeHtml(code)}</div>
+</td></tr>
+<tr><td style="padding:0 28px 26px 28px;font-size:13px;line-height:20px;color:#6b7280">
+The code expires in ${escapeHtml(expiresInMinutes)} minutes and can only be used once.<br><br>
+${escapeHtml(ignoreNote)}
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body></html>`;
+}
+
+/**
+ * The password reset email's subject, plain text and HTML. Built like the verification
+ * email below, for the same reasons.
+ */
+export function passwordResetEmail({ code, expiresInMinutes }) {
+  const subject = `${code} is your BioAudit password reset code`;
+  const ignoreNote =
+    "If you did not ask to reset your password, you can ignore this email: your password " +
+    "stays as it is. Nobody can reset it without the code, and BioAudit will never ask " +
+    "you for it.";
+
+  const text = [
+    "Reset your BioAudit password.",
+    "",
+    "Enter this code in BioAudit, then choose a new password:",
+    "",
+    `    ${code}`,
+    "",
+    `The code expires in ${expiresInMinutes} minutes and can only be used once.`,
+    "",
+    ignoreNote,
+  ].join("\n");
+
+  const html = codeEmailHtml({
+    heading: "Reset your password",
+    lead: "Enter this code in BioAudit, then choose a new password.",
+    code,
+    expiresInMinutes,
+    ignoreNote,
+  });
+
+  return { subject, text, html };
+}
+
+/** The password reset code. Resolves to { sent, recipientNotAllowed }, like the one below. */
+export function sendPasswordResetCode({ to, code, expiresInMinutes, variables }) {
+  return deliver({ to, ...passwordResetEmail({ code, expiresInMinutes }), variables });
+}
+
+/**
  * The verification email's subject, plain text and HTML.
  *
  * Kept separate from sending so the smoke test can check the content without a mail
@@ -220,31 +291,17 @@ export function studentVerificationEmail({ code, expiresInMinutes, universityNam
     "verify an address without the code, and BioAudit will never ask you for it.",
   ].join("\n");
 
-  // The digits stay one unbroken string, spread out by letter-spacing alone, so copying
-  // the code gives exactly the code. Spacing characters between them used to be copied
-  // too, and pasted as "1 2 3 4 5 6". user-select:all lets one click select the whole
-  // code where the mail client honours it. No copy button: mail clients strip scripts.
-  const html = `<!doctype html>
-<html><body style="margin:0;padding:0;background:#f3f4f6">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 12px">
-<tr><td align="center">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#ffffff;border-radius:12px;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:#111827">
-<tr><td style="background:#107C10;border-radius:12px 12px 0 0;padding:18px 28px;color:#ffffff;font-size:18px;font-weight:700">BioAudit</td></tr>
-<tr><td style="padding:28px 28px 8px 28px">
-<p style="margin:0 0 6px 0;font-size:20px;font-weight:700">Confirm you're a student</p>
-<p style="margin:0;font-size:14px;line-height:21px;color:#4b5563">Enter this code in BioAudit to verify your university email${escapeHtml(where)} and unlock the free student plan.</p>
-</td></tr>
-<tr><td align="center" style="padding:20px 28px">
-<div style="display:inline-block;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 26px;font-family:Consolas,Menlo,monospace;font-size:34px;font-weight:700;letter-spacing:8px;color:#0c5e0c;user-select:all;-webkit-user-select:all">${escapeHtml(code)}</div>
-</td></tr>
-<tr><td style="padding:0 28px 26px 28px;font-size:13px;line-height:20px;color:#6b7280">
-The code expires in ${escapeHtml(expiresInMinutes)} minutes and can only be used once.<br><br>
-If you did not create a BioAudit account, you can ignore this email. Nobody can verify an address without the code, and BioAudit will never ask you for it.
-</td></tr>
-</table>
-</td></tr>
-</table>
-</body></html>`;
+  const html = codeEmailHtml({
+    heading: "Confirm you're a student",
+    lead:
+      `Enter this code in BioAudit to verify your university email${where} and unlock ` +
+      "the free student plan.",
+    code,
+    expiresInMinutes,
+    ignoreNote:
+      "If you did not create a BioAudit account, you can ignore this email. Nobody can " +
+      "verify an address without the code, and BioAudit will never ask you for it.",
+  });
 
   return { subject, text, html };
 }

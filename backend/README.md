@@ -92,8 +92,9 @@ stays offline.
 
 `.env.emulated` raises the rate limits, because the test suites make far more sign-ins
 than a person would and the production defaults would stop a run partway through. The
-limits are configurable through `API_RATE_LIMIT_PER_MINUTE` and
-`AUTH_RATE_LIMIT_PER_15MIN`; leave them unset in production to get the defaults.
+limits are configurable through `API_RATE_LIMIT_PER_MINUTE`,
+`AUTH_RATE_LIMIT_PER_15MIN` and `CODE_EMAIL_RATE_LIMIT_PER_HOUR`; leave them unset in
+production to get the defaults.
 
 ## How authentication works
 
@@ -162,6 +163,8 @@ All paths are prefixed with `/api`. Every endpoint except registration, login, a
 | POST | `/auth/register` | Unregistered: Register user account (a student with that code, or an invitee with their invitation token) |
 | POST | `/auth/register-admin` | Admin: Register admin account (also creates the organisation) |
 | POST | `/auth/login` | User: Log in |
+| POST | `/auth/password-reset/send-code` | User: Forgot password, step 1. Emails a six-digit code if the address has an account; the answer is the same either way |
+| POST | `/auth/password-reset` | User: Forgot password, step 2. `{ email, code, newPassword }` sets the password and signs out every session |
 | POST | `/auth/refresh` | Keep a session alive |
 | POST | `/auth/logout` | User: Log out |
 
@@ -222,6 +225,19 @@ Changing a student's email lapses the verification. Until the new address is ver
 emailed to it straight away; `/users/me/student-verification/*` re-sends and checks it), the account
 cannot save a scan or request an AI explanation, though viewing and deleting existing history stays
 open. Every code expires after 15 minutes, allows 5 attempts, and can be re-sent once a minute.
+
+**Limits on code emails.** Sign-up codes, re-verification codes and password reset codes
+share these:
+
+- **Per address:** one code a minute, and at most 5 in 24 hours. Using a code clears the count,
+  so only an address that keeps asking without succeeding reaches it. It also caps guessing at
+  25 tries a day (5 codes × 5 attempts).
+- **Per network:** 10 code emails an hour across every address (`CODE_EMAIL_RATE_LIMIT_PER_HOUR`),
+  so one sender cannot flood many inboxes.
+
+Password resets never reveal whether an address has an account, so for them a limit that
+only applies to an existing account is not reported: the answer stays the same and nothing is
+sent. A reset to the account's current password is refused, and the code stays usable.
 
 **The website signs students up through the API too.** `firestore.rules` no longer lets a client
 create a `users` document with `requestedPlan: 'student'`; only an organisation sign-up may still be

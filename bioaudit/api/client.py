@@ -349,6 +349,25 @@ class ApiClient:
                              authenticated=False)
         self.session = Session.from_payload(data["session"])
 
+    def send_password_reset_code(self, email: str) -> str:
+        """Ask for a password reset code to be emailed. Returns the server's message.
+
+        The answer is the same whether or not the address has an account, so this
+        never says which it is.
+        """
+        data = self._request("POST", "/auth/password-reset/send-code",
+                             body={"email": email}, authenticated=False)
+        return data.get("message", "")
+
+    def reset_password(self, email: str, code: str, new_password: str) -> str:
+        """Set a new password with the emailed code. Every session is signed out, so
+        sign in again afterwards. Returns the server's message."""
+        data = self._request("POST", "/auth/password-reset",
+                             body={"email": email, "code": _clean_code(code),
+                                   "newPassword": new_password},
+                             authenticated=False)
+        return data.get("message", "")
+
     def logout(self) -> None:
         """End the session on the server as well as locally.
 

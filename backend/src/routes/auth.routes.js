@@ -14,10 +14,12 @@ import { env } from "../config/env.js";
 import { auth } from "../config/firebase.js";
 import { ROLES, TOS_VERSION } from "../constants/index.js";
 import { requireAuth } from "../middleware/auth.js";
+import { codeEmailLimiter } from "../middleware/rateLimits.js";
 import { validate, verificationCodeSchema } from "../middleware/validate.js";
 import * as audit from "../services/audit.service.js";
 import * as firebaseAuth from "../services/firebaseAuth.service.js";
 import * as organisations from "../services/organisations.service.js";
+import * as passwordReset from "../services/passwordReset.service.js";
 import * as studentVerification from "../services/studentVerification.service.js";
 import * as usersService from "../services/users.service.js";
 import { ApiError } from "../utils/ApiError.js";
@@ -62,6 +64,7 @@ const universityIdSchema = z.string().trim().min(1).max(60).optional();
 router.post(
   "/register/send-code",
   authLimiter,
+  codeEmailLimiter,
   validate({ body: z.object({ email: emailSchema, universityId: universityIdSchema }) }),
   asyncHandler(async (req, res) => {
     const { delivered, sendId, expiresInMinutes } = await studentVerification.sendSignupCode(
@@ -295,6 +298,55 @@ router.post(
     }
 
     res.json({ user: usersService.toPublicProfile(profile), session });
+  })
+);
+
+/**
+ * POST /api/auth/password-reset/send-code -- Forgot password, step 1
+ *
+ * Emails a six-digit code to the address if it has an account. The answer is the same,
+ * and takes about as long, either way, so this cannot be used to find out who has an
+ * account (see passwordReset.service.js).
+ */
+router.post(
+  "/password-reset/send-code",
+  authLimiter,
+  codeEmailLimiter,
+  validate({ body: z.object({ email: emailSchema }) }),
+  asyncHandler(async (req, res) => {
+    const { expiresInMinutes } = await passwordReset.sendResetCode(req.body.email);
+    res.json({
+      message:
+        `If ${req.body.email} has a BioAudit account, a code is on its way to it. It ` +
+        `expires in ${expiresInMinutes} minutes. Not there? Check that address is spelled ` +
+        "right, then send again in a minute.",
+    });
+  })
+);
+
+/**
+ * POST /api/auth/password-reset -- Forgot password, step 2
+ *
+ * Sets the new password if the code is right. Like any password change, this signs the
+ * account out everywhere and tells its owner by email.
+ */
+router.post(
+  "/password-reset",
+  authLimiter,
+  validate({
+    body: z.object({
+      email: emailSchema,
+      code: verificationCodeSchema,
+      newPassword: passwordSchema,
+    }),
+  }),
+  asyncHandler(async (req, res) => {
+    await passwordReset.resetPassword(req.body.email, req.body.code, req.body.newPassword);
+    res.json({
+      message:
+        "Your password has been reset, and every device signed in to the account has " +
+        "been signed out. Sign in with your new password.",
+    });
   })
 );
 

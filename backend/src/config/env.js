@@ -291,5 +291,9 @@ export const env = {
   rateLimits: {
     apiPerMinute: int("API_RATE_LIMIT_PER_MINUTE", 120),
     authPer15Min: int("AUTH_RATE_LIMIT_PER_15MIN", 20),
+    // Emails carrying a code (sign-up, password reset, re-verifying) one network may ask
+    // for in an hour, across every address. Each one is a real email, so this is what
+    // keeps one sender from flooding many inboxes, or running up the mail bill.
+    codeEmailsPerHour: int("CODE_EMAIL_RATE_LIMIT_PER_HOUR", 10),
   },
 };

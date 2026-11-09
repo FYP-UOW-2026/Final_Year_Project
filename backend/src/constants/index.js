@@ -10,6 +10,7 @@ export const COLLECTIONS = {
   AUDIT: "auditLog",
   STUDENT_VERIFICATIONS: "studentVerifications",
   SIGNUP_VERIFICATIONS: "signupVerifications",
+  PASSWORD_RESETS: "passwordResets",
 };
 
 /**

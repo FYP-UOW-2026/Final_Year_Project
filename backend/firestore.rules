@@ -85,6 +85,11 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Password reset codes: reading one would be enough to take an account over.
+    match /passwordResets/{addressHash} {
+      allow read, write: if false;
+    }
+
     // A scan belongs to the person who ran it. Admin access to a member's scans is
     // granted by the API instead, because it also writes an audit entry for the read.
     match /scans/{scanId} {

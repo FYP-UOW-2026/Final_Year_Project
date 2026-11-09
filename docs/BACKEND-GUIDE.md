@@ -362,8 +362,11 @@ comes up most when explanations stop appearing in the desktop app.
 
 ### Rate limits
 
-Two limiters, both configurable: `API_RATE_LIMIT_PER_MINUTE` (default 120, all routes) and
-`AUTH_RATE_LIMIT_PER_15MIN` (default 20, on register/login only, per IP). The tight one on
+Three limiters, all configurable: `API_RATE_LIMIT_PER_MINUTE` (default 120, all routes),
+`AUTH_RATE_LIMIT_PER_15MIN` (default 20, on register/login only, per IP) and
+`CODE_EMAIL_RATE_LIMIT_PER_HOUR` (default 10, shared by every route that emails a code, per
+IP; defined once in `middleware/rateLimits.js` so they share one allowance). Each address is
+also capped at one code a minute and 5 a day, in `studentVerification.service.js`. The tight one on
 auth is deliberate — without it an attacker could try passwords as fast as the network
 allows. Raise it in `.env` for heavy local testing if you must, but leave the deployed
 default alone.

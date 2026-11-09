@@ -32,9 +32,16 @@ import { findUniversity } from "../data/universities.js";
 import { ApiError } from "../utils/ApiError.js";
 import * as email from "./email.service.js";
 
-const CODE_TTL_MINUTES = 15;
+export const CODE_TTL_MINUTES = 15;
 const MAX_ATTEMPTS = 5;
 const RESEND_COOLDOWN_SECONDS = 60;
+/**
+ * Codes any one address can be sent in a day, on top of the minute between them. Enough
+ * for a typo or two and a slow inbox. It stops the code emails being used to flood
+ * someone's inbox, and caps guessing at MAX_ATTEMPTS a code, so 25 tries a day.
+ */
+const MAX_CODES_PER_DAY = 5;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const users = () => db.collection(COLLECTIONS.USERS);
 const codes = () => db.collection(COLLECTIONS.STUDENT_VERIFICATIONS);
@@ -241,7 +248,7 @@ export async function sendCode(profile) {
   const { delivered } = await issueCode(codes().doc(profile.id), {
     to: profile.email,
     key: profile.id,
-    universityId,
+    send: studentEmailTo(profile.email, universityId),
   });
 
   await users()
@@ -256,8 +263,17 @@ export async function sendCode(profile) {
   return { delivered, expiresInMinutes: CODE_TTL_MINUTES };
 }
 
+/** How a student verification code goes out: the email that names their university. */
+function studentEmailTo(to, universityId) {
+  const universityName = findUniversity(universityId)?.name;
+  return (message) => email.sendStudentVerificationCode({ to, universityName, ...message });
+}
+
 /**
  * Store a fresh code at `ref` and email it to `to`, replacing any earlier one.
+ *
+ * `send({ code, expiresInMinutes, variables })` emails the code and resolves to email
+ * service's { sent, recipientNotAllowed }; `kind` names the code in the development log.
  *
  * Resolves to { delivered, sendId }: whether the message actually went out, and the id
  * its bounce report would carry (see recordBounce). With no mail server configured outside
@@ -266,13 +282,25 @@ export async function sendCode(profile) {
  * delivered is withdrawn and the failure reported, since a student waiting on an email
  * that will never come has no way to tell that from a slow inbox.
  */
-async function issueCode(ref, { to, key, universityId }) {
+export async function issueCode(ref, { to, key, send, kind = "Student verification" }) {
   const existing = await ref.get();
   const sentAt = existing.data()?.sentAt?.toMillis?.() ?? 0;
   const waitSeconds = Math.ceil((sentAt + RESEND_COOLDOWN_SECONDS * 1000 - Date.now()) / 1000);
   if (existing.exists && waitSeconds > 0) {
     throw ApiError.tooManyRequests(
       `A code was sent moments ago. Wait ${waitSeconds} seconds before asking for another.`
+    );
+  }
+  // When each recent code went out, carried from one code to the next. Using a code
+  // deletes the record, so only an address that keeps asking without succeeding fills up.
+  const now = Date.now();
+  const recentSends = (existing.data()?.recentSends ?? []).filter((at) => at > now - DAY_MS);
+  if (recentSends.length >= MAX_CODES_PER_DAY) {
+    const hours = Math.ceil((Math.min(...recentSends) + DAY_MS - now) / (60 * 60 * 1000));
+    throw ApiError.tooManyRequests(
+      `${MAX_CODES_PER_DAY} codes have already been sent to ${to} today. Try again in ` +
+        `${hours} hour${hours === 1 ? "" : "s"}, or contact the BioAudit team if you need ` +
+        "help sooner."
     );
   }
 
@@ -296,16 +324,15 @@ async function issueCode(ref, { to, key, universityId }) {
     attempts: 0,
     sendId,
     bounced: false,
+    recentSends: [...recentSends, now],
     sentAt: FieldValue.serverTimestamp(),
     expiresAt: Timestamp.fromMillis(Date.now() + CODE_TTL_MINUTES * 60 * 1000),
   });
   let delivered = false;
   if (env.email.enabled) {
-    const result = await email.sendStudentVerificationCode({
-      to,
+    const result = await send({
       code,
       expiresInMinutes: CODE_TTL_MINUTES,
-      universityName: findUniversity(universityId)?.name,
       variables: { codeDoc: ref.path, sendId },
     });
     delivered = result.sent;
@@ -334,7 +361,7 @@ async function issueCode(ref, { to, key, universityId }) {
       );
     }
   } else {
-    console.log(`[dev] Student verification code for ${to}: ${code}`);
+    console.log(`[dev] ${kind} code for ${to}: ${code}`);
   }
 
   return { delivered, sendId };
@@ -422,7 +449,7 @@ export async function verifyCode(profile, code) {
  * commits, so a wrong guess is always counted: throwing inside would roll the increment
  * back and give unlimited guesses.
  */
-async function checkCode(ref, { email: address, key, code, onMatch }) {
+export async function checkCode(ref, { email: address, key, code, onMatch }) {
   const outcome = await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists) return "missing";
@@ -541,7 +568,7 @@ export async function sendSignupCode({ email: address, universityId = null }) {
   const { delivered, sendId } = await issueCode(signupCodes().doc(signupCodeId(address)), {
     to: address,
     key: address,
-    universityId,
+    send: studentEmailTo(address, universityId),
   });
   return { delivered, sendId, expiresInMinutes: CODE_TTL_MINUTES };
 }
