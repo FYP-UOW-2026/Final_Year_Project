@@ -309,6 +309,8 @@ const GraphState = Annotation.Root({
   egressLog: Annotation({ reducer: (a, b) => a.concat(b), default: () => [] }),
   result: Annotation(),
   repairCount: Annotation({ reducer: (_a, b) => b, default: () => 0 }),
+  // Must be declared: LangGraph drops any update to a channel the state does not list.
+  _pendingCalls: Annotation({ reducer: (_a, b) => b, default: () => [] }),
 });
 
 function parseModelJson(text) {
@@ -427,10 +429,9 @@ export function buildGraph({ mode, user, scanIds }) {
   const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
   /**
-   * Groq's chat-completions endpoint. Groq is OpenAI-compatible, so this reuses the same
-   * Gemini-shaped-to-OpenAI-shaped translation built for Ollama below -- only the URL,
-   * auth header, and response envelope (`choices[0].message` vs. Ollama's bare `message`)
-   * differ.
+   * Groq's chat-completions endpoint. Unlike Ollama's native /api/chat, it enforces
+   * OpenAI's tool-call format, so its history goes through toOpenAiMessages. The reply
+   * shares Ollama's normaliser once out of its `choices[0].message` envelope.
    */
   async function callGroqCloud(systemPrompt, contents) {
     let delay = 800;
@@ -446,7 +447,7 @@ export function buildGraph({ mode, user, scanIds }) {
           signal: AbortSignal.timeout(env.groq.timeoutMs),
           body: JSON.stringify({
             model: env.groq.model,
-            messages: toOllamaMessages(systemPrompt, contents),
+            messages: toOpenAiMessages(systemPrompt, contents),
             tools: toOllamaTools(toolDeclarations),
           }),
         });
@@ -542,7 +543,7 @@ export function buildGraph({ mode, user, scanIds }) {
       };
     }
 
-    return { messages: [{ role: "model", parts }], result: text };
+    return { messages: [{ role: "model", parts }], result: text, _pendingCalls: [] };
   }
 
   async function toolsNode(s) {
@@ -602,7 +603,8 @@ export function buildGraph({ mode, user, scanIds }) {
     .addNode("validate", validateNode)
     .addNode("repair", repairNode)
     .addEdge(START, "agent")
-    .addConditionalEdges("agent", (s) => (s.result === undefined ? "tools" : "validate"), {
+    // Routed on the calls, not on `result`, which still holds a rejected reply after a repair.
+    .addConditionalEdges("agent", (s) => (s._pendingCalls.length > 0 ? "tools" : "validate"), {
       tools: "tools",
       validate: "validate",
     })
@@ -666,6 +668,57 @@ function toOllamaMessages(systemPrompt, contents) {
   return messages;
 }
 
+/**
+ * Our internal history -> OpenAI's chat format, which Groq enforces: all of a turn's tool
+ * calls in one assistant message, each with an id and JSON-string arguments, and every
+ * call answered by a tool message naming that id.
+ *
+ * The internal history carries no ids, since Gemini needs none and a run can fall back
+ * between providers mid-conversation, so they are numbered here. toolsNode answers calls
+ * in the order they were made, which is what lets a response be paired by position. A
+ * call past the tool budget is never answered, so it is left out rather than refused.
+ */
+function toOpenAiMessages(systemPrompt, contents) {
+  const messages = [{ role: "system", content: systemPrompt }];
+  let answersLeft = contents.flatMap((t) => t.parts ?? []).filter((p) => p.functionResponse).length;
+  let nextCall = 0;
+  let nextResponse = 0;
+
+  for (const turn of contents) {
+    const parts = turn.parts ?? [];
+    if (turn.role === "model") {
+      const content = parts.filter((p) => p.text).map((p) => p.text).join("");
+      const calls = parts.filter((p) => p.functionCall).slice(0, answersLeft);
+      answersLeft -= calls.length;
+      if (!content && calls.length === 0) continue;
+      messages.push({
+        role: "assistant",
+        content,
+        ...(calls.length > 0 && {
+          tool_calls: calls.map(({ functionCall }) => ({
+            id: `call_${nextCall++}`,
+            type: "function",
+            function: { name: functionCall.name, arguments: JSON.stringify(functionCall.args ?? {}) },
+          })),
+        }),
+      });
+      continue;
+    }
+    for (const part of parts) {
+      if (part.text) {
+        messages.push({ role: "user", content: part.text });
+      } else if (part.functionResponse) {
+        messages.push({
+          role: "tool",
+          tool_call_id: `call_${nextResponse++}`,
+          content: JSON.stringify(part.functionResponse.response ?? {}),
+        });
+      }
+    }
+  }
+  return messages;
+}
+
 /** Gemini functionDeclarations -> Ollama's OpenAI-style tool schema. */
 function toOllamaTools(toolDeclarations) {
   return toolDeclarations.map((t) => ({
@@ -674,11 +727,21 @@ function toOllamaTools(toolDeclarations) {
   }));
 }
 
-/** Ollama's chat message -> our internal { parts, text } shape. */
+/** A tool call's arguments: an object from Ollama, a JSON string from Groq. */
+function parseToolArgs(args) {
+  if (typeof args !== "string") return args ?? {};
+  try {
+    return JSON.parse(args);
+  } catch {
+    return {}; // the tool then reports the missing argument back to the model
+  }
+}
+
+/** Ollama's or Groq's chat message -> our internal { parts, text } shape. */
 function normalizeOllamaMessage(message) {
   const parts = [];
   for (const call of message?.tool_calls ?? []) {
-    parts.push({ functionCall: { name: call.function?.name, args: call.function?.arguments ?? {} } });
+    parts.push({ functionCall: { name: call.function?.name, args: parseToolArgs(call.function?.arguments) } });
   }
   if (message?.content) parts.push({ text: message.content });
   return { parts, text: message?.content ?? "" };
