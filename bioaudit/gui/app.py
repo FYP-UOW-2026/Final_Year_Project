@@ -18,7 +18,7 @@ import traceback
 from typing import Callable
 
 from .. import core
-from ..adb import Adb
+from ..adb import Adb, adb_available
 from ..config import Config
 from ..models import TestRun
 from ..report import generator
@@ -171,7 +171,7 @@ def run(cfg: Config | None = None) -> int:
     _require_pyside()
     _install_crash_logging()
 
-    from PySide6.QtCore import Qt, QRect, QSize
+    from PySide6.QtCore import Qt, QPoint, QRect, QSize
     from PySide6.QtGui import QAction, QBrush, QColor, QDesktopServices, QIcon, QPainter, QPen
     from PySide6.QtCore import QUrl
     from PySide6.QtWidgets import (
@@ -248,6 +248,20 @@ def run(cfg: Config | None = None) -> int:
         label = QLabel(text)
         label.setObjectName("fieldLabel")
         return label
+
+    class MenuAbove(QMenu):
+        """A menu that opens upward from `anchor`, for a button at the foot of the window.
+
+        Qt drops a button's menu below it, which from the bottom of the sidebar hung the
+        menu off the window and over the account name.
+        """
+        anchor = None
+
+        def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+            if self.anchor is not None:
+                self.setMinimumWidth(self.anchor.width())
+                self.move(self.anchor.mapToGlobal(QPoint(0, -self.sizeHint().height() - 4)))
+            super().showEvent(event)
 
     class ToggleSwitch(QCheckBox):
         """A checkbox that paints itself as an on/off switch instead of a tick-box.
@@ -326,6 +340,8 @@ def run(cfg: Config | None = None) -> int:
             # Separate thread pair for auto-explain, so it can run independently of a
             # scan/assess job (e.g. after a retry-upload, with no job in flight).
             self._explain_thread: QThread | None = None
+            # And one for fetching ADB, which needs no job widgets at all.
+            self._adb_thread: QThread | None = None
             self._explain_worker: Worker | None = None
             self._explain_target: dict | None = None
             self._last_report_path: str | None = None
@@ -437,7 +453,7 @@ def run(cfg: Config | None = None) -> int:
             thread is waited for instead, with the window already hidden so the wait
             for the current step to end is not spent looking at a frozen window.
             """
-            busy = [t for t in (self._thread, self._explain_thread)
+            busy = [t for t in (self._thread, self._explain_thread, self._adb_thread)
                     if t is not None and t.isRunning()]
             if busy:
                 if QMessageBox.question(
@@ -527,6 +543,7 @@ def run(cfg: Config | None = None) -> int:
             self.account_button.setIcon(QIcon(theme.icon_pixmap("account", theme.DARK["text"], 36)))
             self.account_button.setIconSize(QSize(18, 18))
             self.account_button.setMenu(self.account_menu)
+            self.account_menu.anchor = self.account_button
             layout.addWidget(self.account_button)
             layout.addSpacing(10)
 
@@ -558,7 +575,7 @@ def run(cfg: Config | None = None) -> int:
 
         def _build_account_menu(self) -> None:
             # Opened from the button at the foot of the sidebar (see _build_sidebar).
-            menu = QMenu("Account", self)
+            menu = MenuAbove("Account", self)
             self.account_menu = menu
 
             self.action_sign_in = QAction("Sign in…", self)
@@ -670,7 +687,7 @@ def run(cfg: Config | None = None) -> int:
             self.action_settings.setEnabled(signed_in)
             # Joining is only offered when you are not already in a team; the server refuses
             # a second organisation, so offering it would only produce an error.
-            self.action_join_org.setEnabled(signed_in and not account.organisation_id)
+            self.action_join_org.setVisible(signed_in and not account.organisation_id)
             self.action_verify_student.setVisible(
                 signed_in and account.needs_student_verification)
 
@@ -1352,8 +1369,16 @@ def run(cfg: Config | None = None) -> int:
             self.device_combo = QComboBox()
             refresh = QPushButton("Refresh")
             refresh.clicked.connect(self._refresh_devices)
+            # Only shown when this computer has no ADB at all.
+            self.get_adb_btn = QPushButton("Download ADB")
+            self.get_adb_btn.setObjectName("primary")
+            self.get_adb_btn.setToolTip(
+                "Fetch Google's ADB tool for BioAudit to use. Nothing is installed system-wide.")
+            self.get_adb_btn.clicked.connect(self._download_adb)
+            self.get_adb_btn.hide()
             dev_row.addWidget(self.device_combo, 1)
             dev_row.addWidget(refresh)
+            dev_row.addWidget(self.get_adb_btn)
             form.addRow(_field_label("Device"), dev_row)
 
             pkg_row = QHBoxLayout()
@@ -1494,6 +1519,12 @@ def run(cfg: Config | None = None) -> int:
             # the device list is only built once, when the tab is created.
             if not self.device_combo.isEnabled():
                 self._refresh_devices()
+            if not adb_available(self.cfg.device["adb_path"]):
+                QMessageBox.information(
+                    self, "ADB needed",
+                    "Listing a phone's apps needs ADB. Press Download ADB, next to the "
+                    "device list, to set it up.")
+                return
 
             serial = (self.device_combo.currentText().strip()
                       if self.device_combo.isEnabled() else None)
@@ -1532,6 +1563,12 @@ def run(cfg: Config | None = None) -> int:
 
         def _refresh_devices(self) -> None:
             self.device_combo.clear()
+            has_adb = adb_available(self.cfg.device["adb_path"])
+            self.get_adb_btn.setVisible(not has_adb)
+            if not has_adb:
+                self.device_combo.addItem("(ADB is not set up on this computer: press Download ADB)")
+                self.device_combo.setEnabled(False)
+                return
             try:
                 serials = Adb(self.cfg.device["adb_path"], self.cfg.device["serial"]).devices()
             except Exception as exc:  # noqa: BLE001
@@ -1544,6 +1581,57 @@ def run(cfg: Config | None = None) -> int:
                 self.device_combo.setEnabled(False)
             if serials:
                 self.device_combo.setEnabled(True)
+
+        def _download_adb(self) -> None:
+            """Fetch Google's platform-tools, so assessing a phone needs nothing installed."""
+            from .. import platform_tools
+
+            if QMessageBox.question(
+                self, "Download ADB",
+                "Assessing a phone needs ADB, Google's tool for talking to Android devices.\n\n"
+                "BioAudit can download Google's Android SDK Platform-Tools (about 7 MB) from "
+                "dl.google.com and keep them in its own folder. Nothing is installed "
+                "system-wide.\n\n"
+                f"By downloading them you agree to Google's Android SDK terms:\n"
+                f"{platform_tools.TERMS_URL}\n\nDownload ADB now?",
+            ) != QMessageBox.Yes:
+                return
+
+            self.get_adb_btn.setEnabled(False)
+            self.get_adb_btn.setText("Downloading…")
+            self._adb_thread = QThread()
+            self._adb_worker = Worker(lambda report: platform_tools.download(report))
+            self._adb_worker.moveToThread(self._adb_thread)
+            self._adb_thread.started.connect(self._adb_worker.run)
+            self._adb_worker.progress.connect(lambda m: self.statusBar().showMessage(m + "…"))
+            self._adb_worker.finished.connect(self._on_adb_downloaded)
+            self._adb_worker.failed.connect(self._on_adb_download_failed)
+            self._adb_thread.start()
+
+        def _finish_adb_download(self) -> None:
+            self._adb_thread.quit()
+            self._adb_thread.wait()
+            self._adb_thread = None
+            self._adb_worker = None
+            self.get_adb_btn.setEnabled(True)
+            self.get_adb_btn.setText("Download ADB")
+
+        def _on_adb_downloaded(self, _path) -> None:
+            self._finish_adb_download()
+            self._refresh_devices()
+            self.statusBar().showMessage("ADB is ready.")
+            if not self.device_combo.isEnabled():
+                QMessageBox.information(
+                    self, "ADB is ready",
+                    "ADB is set up. To see your phone here, turn on USB debugging in its "
+                    "Developer options, connect it by USB, accept the \"Allow USB "
+                    "debugging?\" prompt on the phone, then press Refresh.")
+
+        def _on_adb_download_failed(self, message: str) -> None:
+            self._finish_adb_download()
+            # The worker sends "Type: message" and a traceback; the first line says it.
+            first = message.split("\n", 1)[0].split(": ", 1)[-1]
+            QMessageBox.warning(self, "Could not set up ADB", first)
 
         def _run_assess(self) -> None:
             if not self.assess_authorized.isChecked():

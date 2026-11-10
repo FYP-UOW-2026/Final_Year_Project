@@ -14,7 +14,7 @@ This guide is for using the app. To change the code, see
 | To do this | You need |
 |---|---|
 | Scan an APK file | Just BioAudit. No phone. |
-| Test an app on a real phone | A physical Android phone with USB debugging on, plus `adb` |
+| Test an app on a real phone | A physical Android phone with USB debugging on. BioAudit can fetch `adb` for you |
 | Anything at all | An account (free), and an internet connection |
 
 **Why an account is required:** BioAudit does not keep a copy of your scans on your
@@ -28,7 +28,12 @@ find it.
 
 ### Getting `adb` (only for phone testing)
 
-`adb` is Google's own tool for talking to an Android phone over USB. Download
+`adb` is Google's own tool for talking to an Android phone over USB. The easy way: open
+**Assess a device** and press **Download ADB**. BioAudit fetches Google's platform-tools
+(about 7 MB) into its own folder and uses them from then on, with nothing to install or
+add to PATH. The button only appears when the computer has no `adb` already.
+
+To set it up yourself instead, download
 [Android platform-tools](https://developer.android.com/tools/releases/platform-tools),
 unzip it, and add that folder to your PATH. Check it worked:
 

@@ -41,7 +41,14 @@ def resolve_adb(adb_path: str = "adb") -> str:
     for cand in candidates:
         if cand and os.path.isfile(cand):
             return cand
-    return "adb"  # give up; a clear "adb binary not found" error will follow
+    # Last, the copy BioAudit downloads for people with no adb of their own.
+    from .platform_tools import installed_adb
+    return installed_adb() or "adb"  # else give up; "adb binary not found" will follow
+
+
+def adb_available(adb_path: str = "adb") -> bool:
+    """Whether any adb can be found, so a caller can offer to download one if not."""
+    return resolve_adb(adb_path) != "adb" or shutil.which("adb") is not None
 
 
 @dataclass
