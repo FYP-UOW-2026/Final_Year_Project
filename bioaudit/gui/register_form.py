@@ -4,7 +4,7 @@ Modelled on the way GitHub Education and Apple's student pricing work: you say w
 university you attend by picking it from a searchable list, and the email you register
 with has to be one that university issues. Send code has the server email a six-digit
 code to prove you can read that inbox, and the account is only created once that code
-is entered. The address is typed twice, and if the email bounces anyway, the form
+is entered, so a mistyped address simply never gets a code; if it bounces, the form
 says so. A second mode covers the other kind of account, a team whose creator
 becomes its admin, which needs no student check at all.
 
@@ -65,6 +65,14 @@ def make_register_form(base_url: str):
         if placeholder:
             field.setPlaceholderText(placeholder)
         return field
+
+    def side_by_side(first: QWidget, second: QWidget) -> QHBoxLayout:
+        """Two fields on one row: the repeat of an entry sits beside it, keeping the form short."""
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(first, 1)
+        row.addWidget(second, 1)
+        return row
 
     def hint(text: str) -> QLabel:
         label = QLabel(text)
@@ -157,12 +165,8 @@ def make_register_form(base_url: str):
             self.stu_name.setPlaceholderText("Optional")
             self.stu_email = QLineEdit()
             self.stu_email.setPlaceholderText("you@university.ac.uk")
-            # Typed twice because a typo here sends the code to someone else's inbox, or
-            # to none, and nothing can tell that apart from a slow one until it bounces.
-            self.stu_email_again = QLineEdit()
-            self.stu_email_again.setPlaceholderText("Type it again to catch typos")
             self.stu_password = password_field("At least 8 characters")
-            self.stu_confirm = password_field()
+            self.stu_confirm = password_field("Retype password")
 
             self.stu_code = QLineEdit()
             self.stu_code.setPlaceholderText("Six-digit code from the email")
@@ -184,15 +188,12 @@ def make_register_form(base_url: str):
             form.addRow("", self.uni_hint)
             form.addRow("Name:", self.stu_name)
             form.addRow("Uni email:", self.stu_email)
-            form.addRow("Email again:", self.stu_email_again)
-            form.addRow("Password:", self.stu_password)
-            form.addRow("Confirm:", self.stu_confirm)
+            form.addRow("Password:", side_by_side(self.stu_password, self.stu_confirm))
             form.addRow("Code:", code_row)
             form.addRow("", self.code_status)
             form.addRow("", hint(
-                "BioAudit is free for students. Press Send code and we will email a "
-                "six-digit code to your university address to confirm you study there. "
-                "Your account is created once you enter it."))
+                "Free for students. Send code emails you a six-digit code to confirm you "
+                "study there."))
             return page
 
         def _build_team_page(self) -> QWidget:
@@ -207,19 +208,17 @@ def make_register_form(base_url: str):
             self.team_email = QLineEdit()
             self.team_email.setPlaceholderText("you@company.com")
             self.team_password = password_field("At least 8 characters")
-            self.team_confirm = password_field()
+            self.team_confirm = password_field("Retype password")
             self.team_solo = QCheckBox("I work alone (freelancer or consultant)")
 
             form.addRow("Organisation:", self.team_org)
             form.addRow("Name:", self.team_name)
             form.addRow("Work email:", self.team_email)
-            form.addRow("Password:", self.team_password)
-            form.addRow("Confirm:", self.team_confirm)
+            form.addRow("Password:", side_by_side(self.team_password, self.team_confirm))
             form.addRow("", self.team_solo)
             form.addRow("", hint(
-                "Creates a team and makes you its admin, so you can invite colleagues "
-                "and oversee their assessments. Joining someone else's team? Use the "
-                "invite token they sent you instead."))
+                "You become the team's admin and can invite colleagues. Joining someone "
+                "else's team? Use their invite instead."))
             return page
 
         # ---- behaviour ---------------------------------------------------- #
@@ -256,9 +255,6 @@ def make_register_form(base_url: str):
             email = self.stu_email.text().strip()
             if not email:
                 return "Enter your university email address.", email, uni
-            if email.lower() != self.stu_email_again.text().strip().lower():
-                return ("The two email addresses do not match. Check them for typos.",
-                        email, uni)
             if uni is not None and not email_matches(email, uni["domains"]):
                 endings = " or ".join(f"@{d}" for d in uni["domains"])
                 return (f"Use your {uni['name']} email address. It should end in {endings}.",

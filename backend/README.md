@@ -243,9 +243,9 @@ sent. A reset to the account's current password is refused, and the code stays u
 create a `users` document with `requestedPlan: 'student'`; only an organisation sign-up may still be
 written directly. The website's student form should call the endpoints above (its origin must be
 listed in `CORS_ORIGINS`), then sign in with the Firebase client SDK using the same email and
-password if it needs a browser session. Like the desktop app, it should ask for the email address
-twice and refuse to send a code until both match, since a typo sends the code to someone else's
-inbox, or to none. Deploy the rules change with
+password if it needs a browser session. The emailed code is what proves the address, so a typo
+only means the code never arrives; the desktop app asks for the address once. Deploy the rules
+change with
 `firebase deploy --only firestore:rules`.
 
 Codes are emailed through Mailgun (`MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `MAILGUN_FROM`), or any SMTP

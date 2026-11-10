@@ -174,7 +174,7 @@ def show_profile_dialog(parent, client: ApiClient) -> DialogResult:
             self.confirm_password.setEchoMode(QLineEdit.Password)
             form.addRow("Current password:", self.old_password)
             form.addRow("New password:", self.new_password)
-            form.addRow("Confirm:", self.confirm_password)
+            form.addRow("Confirm password:", self.confirm_password)
             outer.addLayout(form)
             outer.addWidget(self._hint(
                 "Changing your password signs you out on every device, including this one. "

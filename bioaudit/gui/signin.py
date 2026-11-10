@@ -53,20 +53,43 @@ def _fit_to_screen(dialog) -> None:
     dialog.setSizeGripEnabled(True)
     dialog.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
     dialog.setWindowFlag(Qt.WindowCloseButtonHint, True)
+    _size_to_tab(dialog, centre=True)
+    dialog.tabs.currentChanged.connect(lambda _index: _size_to_tab(dialog, centre=False))
+
+
+def _size_to_tab(dialog, *, centre: bool) -> None:
+    """Size the dialog to the open tab, so a short one like Sign in is not left mostly empty."""
+    from PySide6.QtWidgets import QSizePolicy
+
+    tabs = dialog.tabs
+    current = tabs.currentWidget()
+    # A tab widget is as tall as its tallest page. Ignoring the hidden pages lets the
+    # scrolling area shrink to the open one.
+    for index in range(tabs.count()):
+        page = tabs.widget(index)
+        policy = QSizePolicy.Preferred if page is current else QSizePolicy.Ignored
+        page.setSizePolicy(policy, policy)
 
     # Leaves room for the title bar, which the available area does not account for.
     frame = 48
     screen = dialog.screen().availableGeometry()
     area = dialog.tabs_area
     # Wrapped text would happily make the suggested width enormous, so the form sets it.
-    width = min(max(dialog.minimumSizeHint().width(), 560), screen.width() - frame)
-    # The form's height, in place of the scroll area's own small suggestion. The suggested
-    # size covers every tab; the height at this width allows for text wrapping further.
-    form = max(area.widget().heightForWidth(width), area.widget().sizeHint().height())
+    width = (min(max(dialog.minimumSizeHint().width(), 600), screen.width() - frame)
+             if centre else dialog.width())
+    tallest_page = max(tabs.widget(i).sizeHint().height() for i in range(tabs.count()))
+    page = max(current.heightForWidth(width), current.sizeHint().height())
+    form = tabs.sizeHint().height() - tallest_page + page
     natural = dialog.layout().totalHeightForWidth(width) - area.sizeHint().height() + form
+    # Only a screen too small for the whole form makes it scroll.
     dialog.resize(width, min(natural, screen.height() - frame))
-    dialog.move(screen.left() + (screen.width() - dialog.width()) // 2,
-                screen.top() + max(0, (screen.height() - frame - dialog.height()) // 2))
+
+    if centre:
+        dialog.move(screen.left() + (screen.width() - dialog.width()) // 2,
+                    screen.top() + max(0, (screen.height() - frame - dialog.height()) // 2))
+    elif dialog.y() + dialog.height() + frame > screen.bottom():
+        # Grown past the bottom of the screen on switching tab: lift it back on.
+        dialog.move(dialog.x(), max(screen.top(), screen.bottom() - frame - dialog.height()))
 
 
 def show_signin_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
@@ -229,10 +252,7 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
             layout.addWidget(title)
 
             intro = QLabel(
-                "Sign in to run a scan. Your results are stored on the server rather "
-                "than on this computer, which is what lets your history follow you "
-                "between machines and, on a team account, gives your admin oversight. "
-                "Create an account, or join one from a team invite, below."
+                "Your results are saved to your account, so they follow you to any computer."
             )
             intro.setWordWrap(True)
             intro.setObjectName("hint")
@@ -294,7 +314,7 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
             form.addRow("Name:", self.join_name)
             form.addRow("Email:", self.join_email)
             form.addRow("Password:", self.join_password)
-            form.addRow("Confirm:", self.join_confirm)
+            form.addRow("Confirm password:", self.join_confirm)
             form.addRow("Invite token:", self.join_token)
 
             note = QLabel(
@@ -484,7 +504,7 @@ def show_password_reset_dialog(parent, *, base_url: str, email: str = "") -> Opt
             form.addRow("Email:", email_row)
             form.addRow("Code:", self.code)
             form.addRow("New password:", self.password)
-            form.addRow("Confirm:", self.confirm)
+            form.addRow("Confirm password:", self.confirm)
             layout.addLayout(form)
 
             self.status = QLabel("")
