@@ -15,14 +15,38 @@ from typing import Optional
 
 from ..api import Account, ApiClient, ApiClientError
 from ..session import clear_session, forget, list_accounts, save_session, switch_to
+from .field_error import (
+    MESSAGES, clear_field_error, email_message, flag_field, password_message, route_api_error,
+)
 from .formatting import tidy_code
-from .register_form import _password_problem, make_register_form
+from ..password_policy import password_strength_problem
+from .register_form import make_register_form
 from .theme import ERROR_TEXT, SUCCESS_TEXT
 
 __all__ = [
     "account_summary", "clear_session", "forget", "list_accounts", "save_session", "switch_to",
     "show_signin_dialog", "show_welcome_dialog",
 ]
+
+
+def _offer_reset(parent, base_url: str, email_field, password_field) -> None:
+    """After a lockout, offer the password reset that lifts it."""
+    from PySide6.QtWidgets import QMessageBox
+
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Warning)
+    box.setWindowTitle("Too many attempts")
+    box.setText("Too many failed sign-in attempts. If this was not you, reset your password.")
+    reset_btn = box.addButton("Reset password", QMessageBox.AcceptRole)
+    box.addButton("Close", QMessageBox.RejectRole)
+    box.exec()
+    if box.clickedButton() is reset_btn:
+        email = show_password_reset_dialog(parent, base_url=base_url,
+                                           email=email_field.text().strip())
+        if email:
+            email_field.setText(email)
+            password_field.clear()
+            password_field.setFocus()
 
 
 def _scrollable(content):
@@ -165,10 +189,25 @@ def show_signin_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
                                       password_field=self.login_password)
             return w
 
-        def _fail(self, message: str) -> None:
-            self.status.setText(message)
+        def _fail(self, message: str, field=None) -> None:
+            if field is not None:
+                flag_field(field, message)
+            else:
+                self.status.setText(message)
             self._ok_button.setEnabled(True)
             self.setCursor(Qt.ArrowCursor)
+
+        def _fail_api(self, exc, registering: bool) -> None:
+            if registering:
+                route_api_error(exc, self.register_form.server_fields(), self._fail,
+                                overrides={409: ("email_taken", self.register_form.email_field())})
+            else:
+                route_api_error(exc, {"email": self.login_email}, self._fail,
+                                overrides={401: ("password_wrong", self.login_password)})
+            self._ok_button.setEnabled(True)
+            self.setCursor(Qt.ArrowCursor)
+            if not registering and exc.status == 429:
+                _offer_reset(self, base_url, self.login_email, self.login_password)
 
         def _submit(self) -> None:
             self.status.setText("")
@@ -182,17 +221,18 @@ def show_signin_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
                 if registering:
                     problem = self.register_form.submit(client)
                     if problem:
-                        return self._fail(problem)
+                        return self._fail(problem, self.register_form.error_field)
                 else:
                     email = self.login_email.text().strip()
                     password = self.login_password.text()
-                    if not email or not password:
-                        return self._fail("Enter your email address and password.")
+                    if bad := email_message(email):
+                        return self._fail(bad, self.login_email)
+                    if not password:
+                        return self._fail(MESSAGES["password_empty"], self.login_password)
                     client.login(email, password)
 
             except ApiClientError as exc:
-                # exc.message is written for a person to read, so show it directly.
-                return self._fail(str(exc))
+                return self._fail_api(exc, registering)
             except Exception as exc:  # noqa: BLE001 - never let the dialog die silently
                 return self._fail(f"Unexpected problem: {exc}")
 
@@ -304,7 +344,7 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
             self.join_email.setPlaceholderText("The email your invite was sent to")
             self.join_password = QLineEdit()
             self.join_password.setEchoMode(QLineEdit.Password)
-            self.join_password.setPlaceholderText("Choose a password, at least 8 characters")
+            self.join_password.setPlaceholderText("Choose a password: 12+ characters, mixed case, digit, symbol")
             self.join_confirm = QLineEdit()
             self.join_confirm.setEchoMode(QLineEdit.Password)
             self.join_token = QTextEdit()
@@ -348,10 +388,30 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
 
         # ---- actions ------------------------------------------------------ #
 
-        def _fail(self, message: str) -> None:
-            self.status.setText(message)
+        def _fail(self, message: str, field=None) -> None:
+            if field is not None:
+                flag_field(field, message)
+            else:
+                self.status.setText(message)
             self.primary_btn.setEnabled(True)
             self.setCursor(Qt.ArrowCursor)
+
+        def _fail_api(self, exc, tab: int) -> None:
+            if tab == CREATE:
+                route_api_error(exc, self.register_form.server_fields(), self._fail,
+                                overrides={409: ("email_taken", self.register_form.email_field())})
+            elif tab == JOIN:
+                route_api_error(exc, {"email": self.join_email, "password": self.join_password,
+                                      "displayName": self.join_name,
+                                      "invitationToken": self.join_token}, self._fail,
+                                overrides={409: ("email_taken", self.join_email)})
+            else:
+                route_api_error(exc, {"email": self.login_email}, self._fail,
+                                overrides={401: ("password_wrong", self.login_password)})
+            self.primary_btn.setEnabled(True)
+            self.setCursor(Qt.ArrowCursor)
+            if tab == SIGNIN and exc.status == 429:
+                _offer_reset(self, base_url, self.login_email, self.login_password)
 
         def _submit(self) -> None:
             self.status.setText("")
@@ -365,20 +425,20 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
                 if tab == CREATE:
                     problem = self.register_form.submit(client)
                     if problem:
-                        return self._fail(problem)
+                        return self._fail(problem, self.register_form.error_field)
 
                 elif tab == JOIN:
                     email = self.join_email.text().strip()
                     password = self.join_password.text()
                     token = self.join_token.toPlainText().strip()
-                    if not email:
-                        return self._fail("Enter the email your invite was sent to.")
+                    if bad := email_message(email):
+                        return self._fail(bad, self.join_email)
                     if password != self.join_confirm.text():
-                        return self._fail("Those passwords do not match.")
-                    if len(password) < 8:
-                        return self._fail("Use a password of at least 8 characters.")
+                        return self._fail(MESSAGES["confirm"], self.join_confirm)
+                    if problem := password_message(password_strength_problem(password)):
+                        return self._fail(problem, self.join_password)
                     if len(token) < 16:
-                        return self._fail("That does not look like a valid invite token.")
+                        return self._fail(MESSAGES["token"], self.join_token)
                     name = self.join_name.text().strip() or None
                     # Creates the account and redeems the invite in one step, so the
                     # session that comes back already carries the team's permissions.
@@ -388,12 +448,14 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
                 else:  # SIGNIN
                     email = self.login_email.text().strip()
                     password = self.login_password.text()
-                    if not email or not password:
-                        return self._fail("Enter your email address and password.")
+                    if bad := email_message(email):
+                        return self._fail(bad, self.login_email)
+                    if not password:
+                        return self._fail(MESSAGES["password_empty"], self.login_password)
                     client.login(email, password)
 
             except ApiClientError as exc:
-                return self._fail(str(exc))
+                return self._fail_api(exc, tab)
             except Exception as exc:  # noqa: BLE001 - never let the dialog die silently
                 return self._fail(f"Unexpected problem: {exc}")
 
@@ -496,7 +558,7 @@ def show_password_reset_dialog(parent, *, base_url: str, email: str = "") -> Opt
                 lambda text: text != tidy_code(text) and self.code.setText(tidy_code(text)))
             self.password = QLineEdit()
             self.password.setEchoMode(QLineEdit.Password)
-            self.password.setPlaceholderText("At least 8 characters")
+            self.password.setPlaceholderText("12+ characters, mixed case, digit, symbol")
             self.confirm = QLineEdit()
             self.confirm.setEchoMode(QLineEdit.Password)
             self.confirm.returnPressed.connect(self._reset)
@@ -527,15 +589,17 @@ def show_password_reset_dialog(parent, *, base_url: str, email: str = "") -> Opt
             self.status.setText(f"<span style='color:{colour}'>{message}</span>")
 
         def _send(self) -> None:
+            self.status.setText("")
             address = self.email.text().strip()
-            if not address:
-                self._show("Enter the email address you sign in with.", error=True)
+            if bad := email_message(address):
+                flag_field(self.email, bad)
                 return
             self.setCursor(Qt.WaitCursor)
             try:
                 message = ApiClient(base_url).send_password_reset_code(address)
             except ApiClientError as exc:
-                self._show(str(exc), error=True)
+                route_api_error(exc, {"email": self.email},
+                                lambda text: self._show(text, error=True))
                 return
             finally:
                 self.setCursor(Qt.ArrowCursor)
@@ -544,24 +608,30 @@ def show_password_reset_dialog(parent, *, base_url: str, email: str = "") -> Opt
             self.code.setFocus()
 
         def _reset(self) -> None:
+            self.status.setText("")
             address = self.email.text().strip()
             code = self.code.text()
             password = self.password.text()
-            if not address:
-                self._show("Enter the email address you sign in with.", error=True)
+            if bad := email_message(address):
+                flag_field(self.email, bad)
                 return
             if len(code) != 6:
-                self._show("Press Send code, then enter the six-digit code from the email.",
-                           error=True)
+                flag_field(self.code, MESSAGES["code"])
                 return
-            if problem := _password_problem(password, self.confirm.text()):
-                self._show(problem, error=True)
+            if password != self.confirm.text():
+                flag_field(self.confirm, MESSAGES["confirm"])
+                return
+            if problem := password_message(password_strength_problem(password)):
+                flag_field(self.password, problem)
                 return
             self.setCursor(Qt.WaitCursor)
             try:
                 ApiClient(base_url).reset_password(address, code, password)
             except ApiClientError as exc:
-                self._show(str(exc), error=True)
+                route_api_error(
+                    exc, {"email": self.email, "code": self.code, "password": self.password},
+                    lambda text: self._show(text, error=True),
+                    overrides={401: ("code", self.code), 403: ("code", self.code)})
                 return
             finally:
                 self.setCursor(Qt.ArrowCursor)

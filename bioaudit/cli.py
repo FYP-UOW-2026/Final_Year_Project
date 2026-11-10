@@ -38,6 +38,7 @@ from .adb import AdbError
 from .api import ApiClient, ApiClientError
 from .config import Config
 from .models import TestRun
+from .password_policy import password_strength_problem
 from .report import export
 from .session import default_base_dir, list_accounts, restore_session, save_session, switch_to
 
@@ -122,9 +123,10 @@ def cmd_register(args, cfg: Config) -> int:
         return 2
 
     server = args.server or cfg.api["base_url"]
-    password = args.password or getpass.getpass("Password (at least 8 characters): ")
-    if len(password) < 8:
-        print("Use a password of at least 8 characters.", file=sys.stderr)
+    password = args.password or getpass.getpass(
+        "Password (12+ characters, upper, lower, digit, symbol): ")
+    if problem := password_strength_problem(password):
+        print(problem, file=sys.stderr)
         return 2
 
     if not args.accept_terms:

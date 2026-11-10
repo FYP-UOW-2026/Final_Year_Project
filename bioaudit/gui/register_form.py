@@ -19,6 +19,8 @@ import time
 from typing import Optional
 
 from ..api import ApiClient, ApiClientError
+from ..password_policy import password_strength_problem
+from .field_error import MESSAGES, email_message, password_message, route_api_error
 from .formatting import tidy_code
 from .theme import ERROR_TEXT, SUCCESS_TEXT
 
@@ -165,7 +167,7 @@ def make_register_form(base_url: str):
             self.stu_name.setPlaceholderText("Optional")
             self.stu_email = QLineEdit()
             self.stu_email.setPlaceholderText("you@university.ac.uk")
-            self.stu_password = password_field("At least 8 characters")
+            self.stu_password = password_field("At least 12 characters, mixed case, digit, symbol")
             self.stu_confirm = password_field("Retype password")
 
             self.stu_code, self.send_code_btn, self.code_status, code_row = self._code_row()
@@ -193,9 +195,7 @@ def make_register_form(base_url: str):
             self.team_name.setPlaceholderText("Optional")
             self.team_email = QLineEdit()
             self.team_email.setPlaceholderText("you@company.com")
-            (self.team_code, self.team_send_btn, self.team_code_status,
-             team_code_row) = self._code_row()
-            self.team_password = password_field("At least 8 characters")
+            self.team_password = password_field("At least 12 characters, mixed case, digit, symbol")
             self.team_confirm = password_field("Retype password")
             self.team_solo = QCheckBox("I work alone (freelancer or consultant)")
 
@@ -243,11 +243,11 @@ def make_register_form(base_url: str):
                 return (f"Choose your university from the list, or pick \"{NOT_LISTED}\".",
                         "", None)
             email = self.stu_email.text().strip()
-            if not email:
-                return "Enter your university email address.", email, uni
+            if bad := email_message(email):
+                return bad, email, uni
             if uni is not None and not email_matches(email, uni["domains"]):
                 endings = " or ".join(f"@{d}" for d in uni["domains"])
-                return (f"Use your {uni['name']} email address. It should end in {endings}.",
+                return (f"{MESSAGES['email']} Use your {uni['name']} email, ending {endings}.",
                         email, uni)
             return None, email, uni
 
@@ -308,7 +308,9 @@ def make_register_form(base_url: str):
                 sent = ApiClient(base_url).send_signup_code(
                     email, university_id, account_type=account_type)
             except ApiClientError as exc:
-                self._show_code_status(str(exc), error=True, label=status_label)
+                route_api_error(exc, {"email": self.stu_email},
+                                lambda text: self._show_code_status(text, error=True),
+                                overrides={409: ("email_taken", self.stu_email)})
                 return
             finally:
                 self.setCursor(Qt.ArrowCursor)
@@ -351,22 +353,25 @@ def make_register_form(base_url: str):
             self.team_code.returnPressed.connect(callback)
 
         def submit(self, client: ApiClient) -> Optional[str]:
-            """Validate, then register. Returns a message to show, or None on success."""
+            """Validate, then register. Returns a message to show, or None on success.
+
+            When the problem belongs to one input, `error_field` is set to it so the
+            caller can show the message there.
+            """
+            self.error_field = None
             if not self.tos_box.isChecked():
                 return "Accept the Terms of Use to create an account."
             if self.pages.currentIndex() == TEAM:
                 org = self.team_org.text().strip()
                 password = self.team_password.text()
                 if not org:
-                    return "Give your organisation a name."
-                problem, email = self._team_details()
-                if problem:
-                    return problem
+                    return self._bad(self.team_org, MESSAGES["org"])
+                if bad := email_message(email):
+                    return self._bad(self.team_email, bad)
                 if problem := _password_problem(password, self.team_confirm.text()):
-                    return problem
-                code = self.team_code.text().strip()
-                if len(code) != 6 or not code.isdigit():
-                    return "Press Send code, then enter the six-digit code we email you."
+                    return self._bad(self._password_target(
+                        password, self.team_confirm.text(),
+                        self.team_password, self.team_confirm), problem)
                 client.register_admin(email, password, org,
                                       self.team_name.text().strip() or None,
                                       tos_accepted=True,
@@ -376,25 +381,45 @@ def make_register_form(base_url: str):
 
             problem, email, uni = self._student_details()
             if problem:
-                return problem
+                return self._bad(self.stu_email, problem)
             password = self.stu_password.text()
             if problem := _password_problem(password, self.stu_confirm.text()):
-                return problem
+                return self._bad(self._password_target(
+                    password, self.stu_confirm.text(),
+                    self.stu_password, self.stu_confirm), problem)
             code = self.stu_code.text().strip()
             if len(code) != 6 or not code.isdigit():
-                return ("Press Send code, then enter the six-digit code we email to your "
-                        "university address.")
+                return self._bad(self.stu_code, MESSAGES["code"])
             client.register(email, password, self.stu_name.text().strip() or None,
                             university_id=uni["id"] if uni else None, code=code,
                             tos_accepted=True)
             return None
 
+        def server_fields(self) -> dict:
+            """Server field name -> input, for the page being shown (see route_api_error)."""
+            if self.pages.currentIndex() == TEAM:
+                return {"email": self.team_email, "password": self.team_password,
+                        "organisationName": self.team_org, "displayName": self.team_name}
+            return {"email": self.stu_email, "password": self.stu_password,
+                    "code": self.stu_code, "displayName": self.stu_name}
+
+        def email_field(self):
+            return self.team_email if self.pages.currentIndex() == TEAM else self.stu_email
+
+        def _bad(self, field, message: str) -> str:
+            self.error_field = field
+            return message
+
+        @staticmethod
+        def _password_target(password, confirm, password_field, confirm_field):
+            """A mismatch is shown on the confirm box, a weak password on the first."""
+            return confirm_field if password != confirm else password_field
+
     return RegisterForm()
 
 
 def _password_problem(password: str, confirm: str) -> Optional[str]:
+    """Catalog wording for what is wrong with a new password, or None."""
     if password != confirm:
-        return "Those passwords do not match."
-    if len(password) < 8:
-        return "Use a password of at least 8 characters."
-    return None
+        return MESSAGES["confirm"]
+    return password_message(password_strength_problem(password))

@@ -219,6 +219,10 @@ QLineEdit, QComboBox {{
 QLineEdit:focus, QComboBox:focus {{
     border: 1px solid {p["focus"]};
 }}
+QLineEdit[error="true"], QLineEdit[error="true"]:focus,
+QTextEdit[error="true"], QTextEdit[error="true"]:focus {{
+    border: 1px solid {ERROR_TEXT};
+}}
 QLineEdit:disabled, QComboBox:disabled {{
     background: {p["disabled_bg"]};
     color: {p["disabled_text"]};

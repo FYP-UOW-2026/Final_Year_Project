@@ -62,7 +62,7 @@ function translateAuthError(message) {
     // typo from an existing account. This is a known, accepted trade-off and it is why
     // registration is rate limited more tightly than the rest of the API.
     EMAIL_EXISTS: "An account already exists for that email address.",
-    WEAK_PASSWORD: "That password is too short. Use at least six characters.",
+    WEAK_PASSWORD: "That password is too weak. Use at least 12 characters with upper, lower, a digit and a symbol.",
     INVALID_EMAIL: "That email address is not valid.",
     TOKEN_EXPIRED: "Your session has expired. Sign in again.",
     INVALID_REFRESH_TOKEN: "Your session is no longer valid. Sign in again.",

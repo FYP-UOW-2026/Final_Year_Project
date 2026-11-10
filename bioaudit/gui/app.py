@@ -344,6 +344,33 @@ def run(cfg: Config | None = None) -> int:
         px.setDevicePixelRatio(d)
         return px
 
+    def _set_macos_app_name(name: str) -> None:
+        """Menu bar / Dock show the bundle name, which is "Python" when run from source.
+        Patch it in memory before Qt starts; no-op elsewhere and on any failure."""
+        if sys.platform != "darwin":
+            return
+        try:
+            import ctypes
+            objc = ctypes.cdll.LoadLibrary("/usr/lib/libobjc.dylib")
+            ctypes.cdll.LoadLibrary("/System/Library/Frameworks/Foundation.framework/Foundation")
+            objc.objc_getClass.restype = ctypes.c_void_p
+            objc.sel_registerName.restype = ctypes.c_void_p
+            send = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                                    ctypes.c_void_p)(("objc_msgSend", objc))
+            send0 = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(
+                ("objc_msgSend", objc))
+            sel = lambda n: objc.sel_registerName(n)  # noqa: E731
+            bundle = send0(objc.objc_getClass(b"NSBundle"), sel(b"mainBundle"))
+            info = send0(bundle, sel(b"infoDictionary"))
+            nsstr = lambda t: send(objc.objc_getClass(b"NSString"),  # noqa: E731
+                                   sel(b"stringWithUTF8String:"), t.encode())
+            for key in ("CFBundleName", "CFBundleDisplayName"):
+                ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                                 ctypes.c_void_p)(("objc_msgSend", objc))(
+                    info, sel(b"setObject:forKey:"), nsstr(name), nsstr(key))
+        except Exception as exc:  # noqa: BLE001
+            _log_diag(f"could not set macOS app name: {exc}")
+
     class MainWindow(QMainWindow):
         def __init__(self) -> None:
             super().__init__()
@@ -2364,11 +2391,12 @@ def run(cfg: Config | None = None) -> int:
                 return
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
+    _set_macos_app_name("BioAudit")
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("BioAudit")
-    _icon = _brand_logo(256)
-    if _icon is not None:
-        app.setWindowIcon(QIcon(_icon))
+    _icon_path = os.path.join(os.path.dirname(__file__), "assets", "logo_icon.png")
+    if os.path.exists(_icon_path):
+        app.setWindowIcon(QIcon(_icon_path))
 
     window = None
 

@@ -123,7 +123,7 @@ await check("registering with a short password is rejected with a clear message"
   });
   assert.equal(res.status, 400);
   const body = await res.json();
-  assert.match(JSON.stringify(body.error.details), /at least 8 characters/);
+  assert.match(JSON.stringify(body.error.details), /at least 12 characters/);
 });
 
 await check("one network can ask for at most ten code emails an hour, across routes", async () => {

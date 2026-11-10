@@ -16,6 +16,7 @@ import { ROLES, TOS_VERSION } from "../constants/index.js";
 import { requireAuth } from "../middleware/auth.js";
 import { codeEmailLimiter } from "../middleware/rateLimits.js";
 import { validate, verificationCodeSchema } from "../middleware/validate.js";
+import { strongPasswordSchema } from "../utils/passwordPolicy.js";
 import * as audit from "../services/audit.service.js";
 import * as firebaseAuth from "../services/firebaseAuth.service.js";
 import * as loginGuard from "../services/loginGuard.service.js";
@@ -47,10 +48,7 @@ const emailSchema = z.string().trim().toLowerCase().email("Enter a valid email a
 const tosSchema = z.literal(true, {
   errorMap: () => ({ message: "You must accept the Terms of Use to create an account." }),
 });
-const passwordSchema = z
-  .string()
-  .min(8, "Use at least 8 characters.")
-  .max(128, "That password is too long.");
+const passwordSchema = strongPasswordSchema;
 // From GET /api/universities. Omitted for "my university isn't listed".
 const universityIdSchema = z.string().trim().min(1).max(60).optional();
 
