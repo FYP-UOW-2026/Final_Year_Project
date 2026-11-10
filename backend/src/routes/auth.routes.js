@@ -17,6 +17,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import * as audit from "../services/audit.service.js";
 import * as firebaseAuth from "../services/firebaseAuth.service.js";
+import * as loginGuard from "../services/loginGuard.service.js";
 import * as organisations from "../services/organisations.service.js";
 import * as studentVerification from "../services/studentVerification.service.js";
 import * as usersService from "../services/users.service.js";
@@ -287,7 +288,7 @@ router.post(
   authLimiter,
   validate({ body: z.object({ email: emailSchema, password: z.string().min(1) }) }),
   asyncHandler(async (req, res) => {
-    const session = await firebaseAuth.signInWithPassword(req.body.email, req.body.password);
+    const session = await loginGuard.signIn(req.body.email, req.body.password);
     const profile = await usersService.getProfile(session.uid);
 
     if (profile.disabled) {

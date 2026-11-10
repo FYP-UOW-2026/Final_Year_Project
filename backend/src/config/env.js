@@ -292,4 +292,10 @@ export const env = {
     apiPerMinute: int("API_RATE_LIMIT_PER_MINUTE", 120),
     authPer15Min: int("AUTH_RATE_LIMIT_PER_15MIN", 20),
   },
+
+  // Locking one email address after repeated wrong passwords (see loginGuard.service.js).
+  loginGuard: {
+    maxFailures: int("LOGIN_MAX_FAILURES", 5),
+    lockMinutes: int("LOGIN_LOCK_MINUTES", 15),
+  },
 };

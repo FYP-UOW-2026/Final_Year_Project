@@ -68,6 +68,7 @@ ICONS = {
     "team": ('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>'
              '<circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/>'
              '<path d="M16 3.13a4 4 0 0 1 0 7.75"/>'),
+    "account": '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
     "home": ('<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/>'
              '<path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999'
              'A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
@@ -426,6 +427,17 @@ QLabel#navHeading {{
     font-weight: 600;
     padding: 0 12px;
 }}
+QPushButton#accountButton {{
+    background: {p["surface"]};
+    border: 1px solid {p["border_strong"]};
+    border-radius: 8px;
+    padding: 9px 12px;
+    margin: 0 12px;
+    text-align: left;
+    font-weight: 600;
+}}
+QPushButton#accountButton:hover {{ border-color: {p["primary"]}; background: {p["surface_alt"]}; }}
+QPushButton#accountButton:focus {{ border-color: {p["focus"]}; }}
 QPushButton#navItem {{
     background: transparent;
     color: {p["muted"]};

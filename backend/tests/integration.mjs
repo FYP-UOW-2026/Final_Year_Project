@@ -439,6 +439,78 @@ await check("an unknown email gives the same answer as a wrong password", async 
   assert.equal(wrongPassword.body.error.message, unknownEmail.body.error.message);
 });
 
+group("Password guessing");
+
+const guessPassword = "guessing-password-1";
+const lockRecord = (email) =>
+  db.collection(COLLECTIONS.LOGIN_ATTEMPTS).doc(crypto.createHash("sha256").update(email).digest("hex"));
+const signInAs = (email, password) => call("POST", "/auth/login", { body: { email, password } });
+let guessedEmail;
+
+await check("five wrong passwords lock the address, whatever the next attempt is", async () => {
+  guessedEmail = `guessed-${unique()}@example.com`;
+  const reg = await call("POST", "/auth/register-admin", {
+    body: { email: guessedEmail, password: guessPassword, organisationName: "Guess Ltd", tosAccepted: true },
+  });
+  assert.equal(reg.status, 201, JSON.stringify(reg.body));
+
+  for (let i = 1; i <= 4; i += 1) {
+    assert.equal((await signInAs(guessedEmail, "not-the-password")).status, 401, `guess ${i}`);
+  }
+  const fifth = await signInAs(guessedEmail, "not-the-password");
+  assert.equal(fifth.status, 429, "the fifth wrong guess should lock the address");
+  assert.match(fifth.body.error.message, /Try again in 15 minutes/);
+
+  const correct = await signInAs(guessedEmail, guessPassword);
+  assert.equal(correct.status, 429, "even the right password waits out a lock");
+});
+
+await check("once a lock has passed the right password works and clears the count", async () => {
+  await lockRecord(guessedEmail).update({ lockedUntil: Date.now() - 1000 });
+  const session = await signInAs(guessedEmail, guessPassword);
+  assert.equal(session.status, 200, JSON.stringify(session.body));
+  assert.equal((await lockRecord(guessedEmail).get()).exists, false);
+});
+
+await check("a repeat lock lasts twice as long", async () => {
+  const email = `repeat-${unique()}@example.com`;
+  await lockRecord(email).set({ failures: 4, firstFailureAt: Date.now(), locks: 1, lockedUntil: Date.now() - 1000 });
+  const locked = await signInAs(email, "not-the-password");
+  assert.equal(locked.status, 429);
+  assert.match(locked.body.error.message, /Try again in 30 minutes/);
+});
+
+await check("an address with no account locks the same way, so a lock reveals nothing", async () => {
+  const email = `nobody-${unique()}@example.com`;
+  const replies = [];
+  for (let i = 0; i < 5; i += 1) replies.push((await signInAs(email, "not-the-password")).status);
+  assert.deepEqual(replies, [401, 401, 401, 401, 429]);
+});
+
+await check("wrong passwords below the limit are forgotten after a correct one", async () => {
+  for (let i = 0; i < 3; i += 1) await signInAs(guessedEmail, "not-the-password");
+  assert.equal((await signInAs(guessedEmail, guessPassword)).status, 200);
+  assert.equal((await signInAs(guessedEmail, "not-the-password")).status, 401);
+  assert.equal((await lockRecord(guessedEmail).get()).data().failures, 1);
+});
+
+await check("guessing a signed-in account's current password locks it too", async () => {
+  const email = `session-${unique()}@example.com`;
+  const reg = await call("POST", "/auth/register-admin", {
+    body: { email, password: guessPassword, organisationName: "Stolen Ltd", tosAccepted: true },
+  });
+  const token = reg.body.session.idToken;
+  const statuses = [];
+  for (let i = 0; i < 5; i += 1) {
+    const { status } = await call("POST", "/users/me/password", {
+      token,
+      body: { currentPassword: "not-the-password", newPassword: "a-brand-new-password" },
+    });
+    statuses.push(status);
+  }
+  assert.deepEqual(statuses, [401, 401, 401, 401, 429]);
+});
+
 group("Own account");
 
 await check("the profile can be read back", async () => {

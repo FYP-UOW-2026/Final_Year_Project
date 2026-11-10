@@ -24,6 +24,50 @@ __all__ = [
 ]
 
 
+def _scrollable(content):
+    """Wrap a tall form so the dialog around it can be smaller than the form."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QFrame, QScrollArea, QStyle
+
+    area = QScrollArea()
+    area.setWidget(content)
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.NoFrame)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    area.setMinimumWidth(content.minimumSizeHint().width()
+                         + area.style().pixelMetric(QStyle.PM_ScrollBarExtent))
+    return area
+
+
+def _fit_to_screen(dialog) -> None:
+    """Open at the form's natural size, or the screen's if that is smaller.
+
+    A laptop at high display scaling has little height to spare. Sized by its form alone,
+    the dialog ran off the bottom of the screen with its buttons and title bar out of
+    reach, and could not be shrunk. The form scrolls instead, and the dialog can be
+    resized, maximised and closed like any other window.
+    """
+    from PySide6.QtCore import Qt
+
+    dialog.setSizeGripEnabled(True)
+    dialog.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
+    dialog.setWindowFlag(Qt.WindowCloseButtonHint, True)
+
+    # Leaves room for the title bar, which the available area does not account for.
+    frame = 48
+    screen = dialog.screen().availableGeometry()
+    area = dialog.tabs_area
+    # Wrapped text would happily make the suggested width enormous, so the form sets it.
+    width = min(max(dialog.minimumSizeHint().width(), 560), screen.width() - frame)
+    # The form's height, in place of the scroll area's own small suggestion. The suggested
+    # size covers every tab; the height at this width allows for text wrapping further.
+    form = max(area.widget().heightForWidth(width), area.widget().sizeHint().height())
+    natural = dialog.layout().totalHeightForWidth(width) - area.sizeHint().height() + form
+    dialog.resize(width, min(natural, screen.height() - frame))
+    dialog.move(screen.left() + (screen.width() - dialog.width()) // 2,
+                screen.top() + max(0, (screen.height() - frame - dialog.height()) // 2))
+
+
 def show_signin_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
     """Show the sign-in dialog.
 
@@ -57,9 +101,13 @@ def show_signin_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
             self.register_form = make_register_form(base_url)
             self.register_form.set_return_action(self._submit)
             self.tabs.addTab(self.register_form, "Create account")
-            layout.addWidget(self.tabs)
+            self.tabs_area = _scrollable(self.tabs)
+            layout.addWidget(self.tabs_area, 1)
 
             self.remember = QCheckBox("Keep me signed in on this computer")
+            # Signing in with this off forgets a saved login, so once someone on this
+            # computer has opted in it starts ticked, rather than undoing that by accident.
+            self.remember.setChecked(bool(list_accounts(base_dir)))
             self.remember.setToolTip(
                 "Saves your session to a file in your home folder so you do not have to "
                 "sign in again. Leave this off on a shared computer."
@@ -126,6 +174,7 @@ def show_signin_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
             self.accept()
 
     dialog = SignInDialog()
+    _fit_to_screen(dialog)
     if dialog.exec() == QDialog.Accepted and dialog.client is not None:
         remember = dialog.remember.isChecked()
         if remember:
@@ -192,9 +241,13 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
             self.tabs.addTab(self._build_join_tab(), "Join with an invite")
             self.tabs.addTab(self._build_signin_tab(), "Sign in")
             self.tabs.currentChanged.connect(self._on_tab_changed)
-            layout.addWidget(self.tabs)
+            self.tabs_area = _scrollable(self.tabs)
+            layout.addWidget(self.tabs_area, 1)
 
             self.remember = QCheckBox("Keep me signed in on this computer")
+            # Signing in with this off forgets a saved login, so once someone on this
+            # computer has opted in it starts ticked, rather than undoing that by accident.
+            self.remember.setChecked(bool(list_accounts(base_dir)))
             self.remember.setToolTip(
                 "Saves your session to a file in your home folder so you do not have to "
                 "sign in again. Leave this off on a shared computer."
@@ -322,6 +375,7 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
             self.accept()
 
     dialog = WelcomeDialog()
+    _fit_to_screen(dialog)
     accepted = dialog.exec() == QDialog.Accepted
 
     if accepted and dialog.client is not None:

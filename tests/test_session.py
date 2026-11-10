@@ -68,6 +68,21 @@ def test_revoked_token_drops_only_that_entry(tmp_path, monkeypatch):
     assert [a.email for a in sess.list_accounts(tmp_path)] == ["b@x.com"]
 
 
+@pytest.mark.parametrize("status", [None, 429, 500, 503])
+def test_server_trouble_keeps_the_saved_login(tmp_path, monkeypatch, status):
+    sess.save_session(tmp_path, _client("a@x.com"))
+
+    def refresh(self):
+        raise ApiClientError("could not reach the server", status=status)
+
+    monkeypatch.setattr(ApiClient, "refresh", refresh)
+    assert sess.restore_session(tmp_path, "http://x/api") is None
+    assert [a.email for a in sess.list_accounts(tmp_path)] == ["a@x.com"]
+
+    _fake_restore(monkeypatch)
+    assert sess.restore_session(tmp_path, "http://x/api") is not None
+
+
 def test_switch_to_unknown_account_returns_none(tmp_path):
     assert sess.switch_to(tmp_path, "nobody@x.com", "http://x/api") is None
 

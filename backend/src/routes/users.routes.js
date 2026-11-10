@@ -15,7 +15,7 @@ import { env } from "../config/env.js";
 import { loadProfile, requireAuth } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import * as email from "../services/email.service.js";
-import * as firebaseAuth from "../services/firebaseAuth.service.js";
+import * as loginGuard from "../services/loginGuard.service.js";
 import * as organisations from "../services/organisations.service.js";
 import * as studentVerification from "../services/studentVerification.service.js";
 import * as usersService from "../services/users.service.js";
@@ -71,7 +71,7 @@ router.post(
       throw ApiError.badRequest("That is already your email address.");
     }
 
-    await firebaseAuth.verifyPassword(req.profile.email, req.body.currentPassword);
+    await loginGuard.verifyPassword(req.profile.email, req.body.currentPassword);
     let updated = await usersService.changeEmail(req.user.uid, req.body.newEmail);
 
     // A student moving to (or between) university addresses gets a code for the new one
@@ -179,7 +179,7 @@ router.post(
       throw ApiError.badRequest("This account has no email address on record.");
     }
 
-    await firebaseAuth.verifyPassword(req.profile.email, req.body.currentPassword);
+    await loginGuard.verifyPassword(req.profile.email, req.body.currentPassword);
     await usersService.changePassword(req.user.uid, req.body.newPassword);
 
     // A password change the account owner did not make is the one they most need to hear
@@ -225,7 +225,7 @@ router.delete(
       }
     }
 
-    await firebaseAuth.verifyPassword(req.profile.email, req.body.currentPassword);
+    await loginGuard.verifyPassword(req.profile.email, req.body.currentPassword);
 
     // Captured before deletion so the admin notice below can still name who left.
     const departing = { email: req.profile.email, organisationId: req.profile.organisationId };

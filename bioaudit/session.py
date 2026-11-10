@@ -22,9 +22,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from .api import ApiClient, ApiClientError, Session
+from .api import ApiClient, ApiClientError, AuthRequiredError, Session
 
 SESSION_FILENAME = "session.json"
+# The server looked at the session and refused it, as opposed to not answering.
+_SESSION_REJECTED = (401, 403, 404)
 REFRESH_TOKEN_ENV = "BIOAUDIT_REFRESH_TOKEN"
 
 
@@ -135,9 +137,10 @@ def _restore(base_dir, email: str, default_base_url: str) -> Optional[ApiClient]
     """Rebuild a signed-in client for one saved account, or drop the entry and return None.
 
     The stored access token has almost certainly expired, so this refreshes before
-    handing the client back. If the refresh fails, for any reason from a revoked session
-    (a password change or joining a team revokes tokens) to the server being down, the
-    stored entry is useless and is removed, so the caller asks for the password again.
+    handing the client back. Only a session the server refused is removed (a password
+    change or joining a team revokes tokens). Not reaching the server says nothing about
+    the session, so the entry is kept for the next launch: one bad connection must not
+    undo "keep me signed in".
     """
     entry = _read(base_dir)["accounts"].get(email)
     if entry is None:
@@ -153,8 +156,9 @@ def _restore(base_dir, email: str, default_base_url: str) -> Optional[ApiClient]
     try:
         client.refresh()
         client.get_profile()
-    except ApiClientError:
-        forget(base_dir, email)
+    except ApiClientError as exc:
+        if isinstance(exc, AuthRequiredError) or exc.status in _SESSION_REJECTED:
+            forget(base_dir, email)
         return None
 
     return client

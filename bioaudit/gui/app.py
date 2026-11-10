@@ -80,6 +80,48 @@ def _make_worker_classes():
 # The job step that uploads a finished run; it cannot be cancelled.
 SAVING_STEP = "Saving to your account"
 
+# Held for the life of the process: while it listens, this is the running copy.
+_instance_server = None
+
+
+def _hand_over_to_running_app(on_new_launch: Callable[[], None]) -> bool:
+    """True if BioAudit is already open, in which case it has been told to come forward.
+
+    Otherwise this launch becomes the running copy and `on_new_launch` is called whenever
+    a later one starts. Anything going wrong here must not stop the app from opening, so
+    only a definite answer that another copy holds the name counts.
+    """
+    global _instance_server
+    if _instance_server is not None:
+        return False
+
+    import getpass
+
+    from PySide6.QtNetwork import QAbstractSocket, QLocalServer, QLocalSocket
+
+    try:
+        user = getpass.getuser()
+    except Exception:  # noqa: BLE001 - only used to keep users' copies apart
+        user = "user"
+    name = f"bioaudit-desktop-{user}"
+
+    probe = QLocalSocket()
+    probe.connectToServer(name)
+    if probe.waitForConnected(500):
+        probe.disconnectFromServer()
+        return True
+
+    # A crash can leave the name behind on macOS and Linux.
+    QLocalServer.removeServer(name)
+    server = QLocalServer()
+    server.newConnection.connect(lambda: (server.nextPendingConnection().deleteLater(),
+                                          on_new_launch()))
+    if not server.listen(name):
+        return server.serverError() == QAbstractSocket.AddressInUseError
+    _instance_server = server
+    return False
+
+
 _crash_log_handles: list = []   # keep the file object alive for the process lifetime
 
 
@@ -134,7 +176,7 @@ def run(cfg: Config | None = None) -> int:
     from PySide6.QtCore import QUrl
     from PySide6.QtWidgets import (
         QApplication, QButtonGroup, QCheckBox, QComboBox, QCompleter, QFileDialog, QFormLayout,
-        QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
+        QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu,
         QMessageBox, QProgressBar, QPushButton, QTabWidget,
         QTextBrowser, QVBoxLayout, QWidget,
     )
@@ -477,6 +519,17 @@ def run(cfg: Config | None = None) -> int:
             layout.addWidget(divider)
             layout.addSpacing(12)
 
+            # Kept with the page navigation: as a menu bar along the top of the window it
+            # was easy to miss.
+            self.account_button = QPushButton("Account")
+            self.account_button.setObjectName("accountButton")
+            self.account_button.setCursor(Qt.PointingHandCursor)
+            self.account_button.setIcon(QIcon(theme.icon_pixmap("account", theme.DARK["text"], 36)))
+            self.account_button.setIconSize(QSize(18, 18))
+            self.account_button.setMenu(self.account_menu)
+            layout.addWidget(self.account_button)
+            layout.addSpacing(10)
+
             # Signed-in state stays visible at all times rather than behind a menu.
             self.account_label = QLabel("")
             self.account_label.setObjectName("accountBadge")
@@ -504,7 +557,9 @@ def run(cfg: Config | None = None) -> int:
         # ---- Account ------------------------------------------------------ #
 
         def _build_account_menu(self) -> None:
-            menu = self.menuBar().addMenu("&Account")
+            # Opened from the button at the foot of the sidebar (see _build_sidebar).
+            menu = QMenu("Account", self)
+            self.account_menu = menu
 
             self.action_sign_in = QAction("Sign in…", self)
             self.action_sign_in.triggered.connect(self._sign_in)
@@ -2227,6 +2282,21 @@ def run(cfg: Config | None = None) -> int:
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("BioAudit")
+
+    window = None
+
+    def _bring_to_front() -> None:
+        """Another launch asked for the app: show this one instead of opening a second."""
+        if window is None:
+            return
+        if window.isMinimized():
+            window.showNormal()
+        target = QApplication.activeModalWidget() or window
+        target.raise_()
+        target.activateWindow()
+
+    if _hand_over_to_running_app(_bring_to_front):
+        return 0
 
     # Styling must not be able to stop the app opening, so a failure here degrades to
     # Qt's default look rather than raising.

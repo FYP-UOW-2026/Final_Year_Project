@@ -378,6 +378,12 @@ everything by default and exist as a second line of defence.
 **Rate limits.** 120 requests a minute across the API, and 20 attempts per 15 minutes on
 registration and login, since those are the two endpoints worth guessing at.
 
+**Password guessing.** Five wrong passwords for one email address within 15 minutes lock it
+for 15 minutes, doubling to a cap of an hour for repeat locks (`LOGIN_MAX_FAILURES`,
+`LOGIN_LOCK_MINUTES`). During a lock even the right password gets a 429. Sign-in and the
+routes that re-ask for the password share the count, and addresses with no account are
+counted too, so a lock reveals nothing about which addresses exist.
+
 ## Project layout
 
 ```
