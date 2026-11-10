@@ -20,6 +20,7 @@ from typing import Callable
 from .. import core
 from ..adb import Adb, adb_available
 from ..config import Config
+from ..masking import mask_serial
 from ..models import TestRun
 from ..report import generator
 from .formatting import format_when, severity_summary
@@ -1526,7 +1527,7 @@ def run(cfg: Config | None = None) -> int:
                     "device list, to set it up.")
                 return
 
-            serial = (self.device_combo.currentText().strip()
+            serial = (self.device_combo.currentData()
                       if self.device_combo.isEnabled() else None)
             try:
                 adb = Adb(self.cfg.device["adb_path"], serial or self.cfg.device["serial"])
@@ -1575,7 +1576,10 @@ def run(cfg: Config | None = None) -> int:
                 self.statusBar().showMessage(f"adb error: {exc}")
                 serials = []
             if serials:
-                self.device_combo.addItems(serials)
+                # Show a masked label but keep the real serial as item data: adb needs
+                # the real one, a screen share should not show it.
+                for ser in serials:
+                    self.device_combo.addItem(mask_serial(ser), ser)
             else:
                 self.device_combo.addItem("(no device — check USB debugging)")
                 self.device_combo.setEnabled(False)
@@ -1650,7 +1654,7 @@ def run(cfg: Config | None = None) -> int:
                 QMessageBox.warning(self, "Not found", f"APK does not exist:\n{apk}")
                 return
 
-            serial = self.device_combo.currentText().strip()
+            serial = self.device_combo.currentData() or ""
 
             # Honour the device selected in the combo box for this run.
             cfg = self.cfg

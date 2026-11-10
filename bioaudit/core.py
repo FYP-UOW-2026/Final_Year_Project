@@ -30,6 +30,7 @@ import time
 from .adb import Adb, AdbError
 from .config import Config
 from .engine import recommendations
+from .masking import mask_serial
 from .models import TestRun
 from .report import generator
 
@@ -107,7 +108,7 @@ def build_assess(package: str, apk: str | None, cfg: Config, adb: Adb | None = N
     adb = adb or Adb(cfg.device["adb_path"], cfg.device["serial"])
     serial = adb.require_device()
     if not adb.is_installed(package):
-        raise AdbError(f"Package {package} is not installed on {serial}.")
+        raise AdbError(f"Package {package} is not installed on {mask_serial(serial)}.")
 
     run = TestRun(
         package=package,

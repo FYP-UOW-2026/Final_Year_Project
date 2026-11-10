@@ -10,6 +10,8 @@ _DEFAULTS: dict[str, Any] = {
     "device": {"serial": None, "adb_path": "adb"},
     "runtime": {"trials_per_scenario": 30, "settle_seconds": 2},
     "report": {"output_dir": "reports"},
+    # Hide hardware serials in on-screen text (see masking.py). Display only.
+    "privacy": {"mask_serial": True},
     # Backend for accounts and history. BioAudit keeps no local copy of a scan, so every
     # front end needs this to do anything: `enabled` just tracks whether the current
     # process has signed in yet, not whether it is allowed to. Points at the hosted
@@ -30,6 +32,7 @@ class Config:
     runtime: dict = field(default_factory=lambda: dict(_DEFAULTS["runtime"]))
     report: dict = field(default_factory=lambda: dict(_DEFAULTS["report"]))
     api: dict = field(default_factory=lambda: dict(_DEFAULTS["api"]))
+    privacy: dict = field(default_factory=lambda: dict(_DEFAULTS["privacy"]))
 
     @classmethod
     def load(cls, path: Optional[str] = None) -> "Config":
@@ -39,6 +42,8 @@ class Config:
             import yaml  # optional; only needed to parse an on-disk config file
             with open(candidate, "r", encoding="utf-8") as fh:
                 raw = yaml.safe_load(fh) or {}
-            for section in ("device", "runtime", "report", "api"):
+            for section in ("device", "runtime", "report", "api", "privacy"):
                 getattr(cfg, section).update(raw.get(section, {}))
+        from . import masking
+        masking.set_enabled(cfg.privacy.get("mask_serial", True))
         return cfg
