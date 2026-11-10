@@ -15,8 +15,9 @@ from typing import Optional
 
 from ..api import Account, ApiClient, ApiClientError
 from ..session import clear_session, forget, list_accounts, save_session, switch_to
-from .register_form import make_register_form
-from .theme import ERROR_TEXT
+from .formatting import tidy_code
+from .register_form import _password_problem, make_register_form
+from .theme import ERROR_TEXT, SUCCESS_TEXT
 
 __all__ = [
     "account_summary", "clear_session", "forget", "list_accounts", "save_session", "switch_to",
@@ -136,6 +137,9 @@ def show_signin_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
             self.login_password.returnPressed.connect(self._submit)
             form.addRow("Email:", self.login_email)
             form.addRow("Password:", self.login_password)
+            _add_forgot_password_link(form, parent=self, base_url=base_url,
+                                      email_field=self.login_email,
+                                      password_field=self.login_password)
             return w
 
         def _fail(self, message: str) -> None:
@@ -312,6 +316,9 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
             self.login_password.returnPressed.connect(self._submit)
             form.addRow("Email:", self.login_email)
             form.addRow("Password:", self.login_password)
+            _add_forgot_password_link(form, parent=self, base_url=base_url,
+                                      email_field=self.login_email,
+                                      password_field=self.login_password)
             return w
 
         def _on_tab_changed(self, index: int) -> None:
@@ -390,6 +397,162 @@ def show_welcome_dialog(parent, *, base_url: str, base_dir: str | os.PathLike):
     # The dialog was closed without signing in. There is no guest fallback to drop back
     # to, so the caller is expected to treat this as "give up", not "carry on".
     return None, False
+
+
+def _add_forgot_password_link(form, *, parent, base_url: str, email_field,
+                              password_field) -> None:
+    """Put a "Forgot password?" link under a sign-in form's password field.
+
+    It opens the reset dialog with whatever email is already typed in. Once the
+    password is reset, that email is filled in and the password field focused, ready
+    to sign in with the new one.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QPushButton, QSizePolicy
+
+    link = QPushButton("Forgot password?")
+    link.setFlat(True)
+    link.setCursor(Qt.PointingHandCursor)
+    # Undo the theme's button look (border, padding, minimum height, hover fill) so this
+    # reads as a link, and keep it to the width of its text rather than the whole row.
+    link.setStyleSheet(
+        "QPushButton { border: none; background: transparent; padding: 0; margin: 0;"
+        " min-height: 0; text-align: left; text-decoration: underline; }"
+        " QPushButton:hover, QPushButton:pressed { border: none; background: transparent; }")
+    link.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+    def reset() -> None:
+        email = show_password_reset_dialog(parent, base_url=base_url,
+                                           email=email_field.text().strip())
+        if email:
+            email_field.setText(email)
+            password_field.clear()
+            password_field.setFocus()
+
+    link.clicked.connect(reset)
+    form.addRow("", link)
+
+
+def show_password_reset_dialog(parent, *, base_url: str, email: str = "") -> Optional[str]:
+    """Reset a forgotten password with a six-digit code emailed to the account.
+
+    Returns the email the password was reset for, or None if the dialog was closed
+    first. The server's answer to "send a code" is the same whether or not the address
+    has an account, so this dialog cannot tell anyone which addresses do.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import (
+        QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
+        QVBoxLayout,
+    )
+
+    class ResetDialog(QDialog):
+        def __init__(self) -> None:
+            super().__init__(parent)
+            self.setWindowTitle("Reset your password")
+            self.setMinimumWidth(460)
+            self.reset_email: Optional[str] = None
+
+            layout = QVBoxLayout(self)
+            intro = QLabel(
+                "Enter the email you sign in with and press <b>Send code</b>. We will email "
+                "you a six-digit code. Enter it here with a new password.")
+            intro.setWordWrap(True)
+            layout.addWidget(intro)
+
+            form = QFormLayout()
+            self.email = QLineEdit(email)
+            self.email.setPlaceholderText("you@example.com")
+            self.send_btn = QPushButton("Send code")
+            self.send_btn.setCursor(Qt.PointingHandCursor)
+            self.send_btn.clicked.connect(self._send)
+            email_row = QHBoxLayout()
+            email_row.addWidget(self.email, 1)
+            email_row.addWidget(self.send_btn)
+
+            self.code = QLineEdit()
+            self.code.setPlaceholderText("Six-digit code from the email")
+            self.code.textEdited.connect(
+                lambda text: text != tidy_code(text) and self.code.setText(tidy_code(text)))
+            self.password = QLineEdit()
+            self.password.setEchoMode(QLineEdit.Password)
+            self.password.setPlaceholderText("At least 8 characters")
+            self.confirm = QLineEdit()
+            self.confirm.setEchoMode(QLineEdit.Password)
+            self.confirm.returnPressed.connect(self._reset)
+
+            form.addRow("Email:", email_row)
+            form.addRow("Code:", self.code)
+            form.addRow("New password:", self.password)
+            form.addRow("Confirm:", self.confirm)
+            layout.addLayout(form)
+
+            self.status = QLabel("")
+            self.status.setWordWrap(True)
+            layout.addWidget(self.status)
+
+            buttons = QHBoxLayout()
+            buttons.addStretch(1)
+            cancel = QPushButton("Cancel")
+            cancel.clicked.connect(self.reject)
+            buttons.addWidget(cancel)
+            self.reset_btn = QPushButton("Reset password")
+            self.reset_btn.setDefault(True)
+            self.reset_btn.clicked.connect(self._reset)
+            buttons.addWidget(self.reset_btn)
+            layout.addLayout(buttons)
+
+        def _show(self, message: str, error: bool) -> None:
+            colour = ERROR_TEXT if error else SUCCESS_TEXT
+            self.status.setText(f"<span style='color:{colour}'>{message}</span>")
+
+        def _send(self) -> None:
+            address = self.email.text().strip()
+            if not address:
+                self._show("Enter the email address you sign in with.", error=True)
+                return
+            self.setCursor(Qt.WaitCursor)
+            try:
+                message = ApiClient(base_url).send_password_reset_code(address)
+            except ApiClientError as exc:
+                self._show(str(exc), error=True)
+                return
+            finally:
+                self.setCursor(Qt.ArrowCursor)
+            self.send_btn.setText("Send again")
+            self._show(message, error=False)
+            self.code.setFocus()
+
+        def _reset(self) -> None:
+            address = self.email.text().strip()
+            code = self.code.text()
+            password = self.password.text()
+            if not address:
+                self._show("Enter the email address you sign in with.", error=True)
+                return
+            if len(code) != 6:
+                self._show("Press Send code, then enter the six-digit code from the email.",
+                           error=True)
+                return
+            if problem := _password_problem(password, self.confirm.text()):
+                self._show(problem, error=True)
+                return
+            self.setCursor(Qt.WaitCursor)
+            try:
+                ApiClient(base_url).reset_password(address, code, password)
+            except ApiClientError as exc:
+                self._show(str(exc), error=True)
+                return
+            finally:
+                self.setCursor(Qt.ArrowCursor)
+            QMessageBox.information(
+                self, "Password reset",
+                "Your password has been reset. Sign in with your new password.")
+            self.reset_email = address
+            self.accept()
+
+    dialog = ResetDialog()
+    return dialog.reset_email if dialog.exec() == QDialog.Accepted else None
 
 
 def account_summary(account: Optional[Account]) -> str:

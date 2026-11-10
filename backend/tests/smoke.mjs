@@ -30,12 +30,14 @@ process.env.FREE_HISTORY_LIMIT = "10";
 // let this offline test reach a real mail provider.
 process.env.MAILGUN_API_KEY = "";
 process.env.SMTP_HOST = "";
+// Pinned so the code-email limit test below does not depend on backend/.env.
+process.env.CODE_EMAIL_RATE_LIMIT_PER_HOUR = "10";
 
 const { createApp } = await import("../src/app.js");
 const { redact } = await import("../src/utils/redact.js");
 const { renderScanReportHtml } = await import("../src/services/report.service.js");
 const { compareScans } = await import("../src/services/scans.service.js");
-const { mailgunMessage, studentVerificationEmail } = await import(
+const { mailgunMessage, passwordResetEmail, studentVerificationEmail } = await import(
   "../src/services/email.service.js"
 );
 const { UNIVERSITIES } = await import("../src/data/universities.js");
@@ -116,6 +118,23 @@ await check("registering with a short password is rejected with a clear message"
   assert.equal(res.status, 400);
   const body = await res.json();
   assert.match(JSON.stringify(body.error.details), /at least 8 characters/);
+});
+
+await check("one network can ask for at most ten code emails an hour, across routes", async () => {
+  // Empty bodies are refused by validation, but each still counts against the limit.
+  const ask = (path) =>
+    fetch(`${base}/api${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+  for (let i = 0; i < 10; i += 1) {
+    const res = await ask(i % 2 ? "/auth/password-reset/send-code" : "/auth/register/send-code");
+    assert.equal(res.status, 400, `request ${i + 1} should reach validation`);
+  }
+  const eleventh = await ask("/auth/password-reset/send-code");
+  assert.equal(eleventh.status, 429);
+  assert.match((await eleventh.json()).error.message, /Too many codes/);
 });
 
 console.log("\nSecret redaction");
@@ -218,10 +237,21 @@ await check("the code is in the subject, the text and the HTML", () => {
   });
   assert.match(mail.subject, /^048213 /);
   assert.match(mail.text, /048213/);
-  // The HTML puts a hair space between the digits for readability.
-  assert.ok(mail.html.replaceAll("&#8202;", "").includes("048213"));
+  // Unbroken, so highlighting and copying it gives exactly the code. Spacing between
+  // the digits is styling only; characters there get copied along with them.
+  assert.ok(mail.html.includes(">048213<"), "the HTML code must be one unbroken string");
+  assert.ok(!/&#8202;|&#8201;|&nbsp;/.test(mail.html), "no spacing characters in the HTML");
   assert.match(mail.text, /National University of Singapore/);
   assert.match(mail.text, /15 minutes/);
+});
+
+await check("the password reset email carries the code, unbroken, and says how to ignore it", () => {
+  const mail = passwordResetEmail({ code: "730154", expiresInMinutes: 15 });
+  assert.match(mail.subject, /^730154 .*password reset/);
+  assert.match(mail.text, /730154/);
+  assert.ok(mail.html.includes(">730154<"), "the HTML code must be one unbroken string");
+  assert.match(mail.text, /did not ask to reset your password/);
+  assert.match(mail.html, /Reset your password/);
 });
 
 await check("markup in a university name is escaped in the HTML", () => {

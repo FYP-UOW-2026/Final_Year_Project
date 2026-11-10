@@ -11,6 +11,7 @@ export const COLLECTIONS = {
   STUDENT_VERIFICATIONS: "studentVerifications",
   SIGNUP_VERIFICATIONS: "signupVerifications",
   LOGIN_ATTEMPTS: "loginAttempts",
+  PASSWORD_RESETS: "passwordResets",
 };
 
 /**

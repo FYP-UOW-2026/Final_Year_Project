@@ -29,6 +29,7 @@ process.env.FREE_HISTORY_LIMIT = "3"; // small, so retention is quick to prove
 // would start refusing partway through the run.
 process.env.AUTH_RATE_LIMIT_PER_15MIN = "1000";
 process.env.API_RATE_LIMIT_PER_MINUTE = "100000";
+process.env.CODE_EMAIL_RATE_LIMIT_PER_HOUR = "100000";
 // Lets the tests sign Mailgun bounce reports the way Mailgun would.
 const WEBHOOK_KEY = "integration-webhook-signing-key";
 process.env.MAILGUN_WEBHOOK_SIGNING_KEY = WEBHOOK_KEY;
@@ -62,8 +63,9 @@ process.env.STRIPE_PRICE_ID = "price_yearly_test";
 process.env.BILL_NEW_ORGANISATIONS = "false";
 
 const { createApp } = await import("../src/app.js");
-const { db, auth } = await import("../src/config/firebase.js");
+const { db, auth, Timestamp } = await import("../src/config/firebase.js");
 const { hashCode, signupCodeId } = await import("../src/services/studentVerification.service.js");
+const { resetCodeId } = await import("../src/services/passwordReset.service.js");
 const { COLLECTIONS } = await import("../src/constants/index.js");
 const { env } = await import("../src/config/env.js");
 
@@ -225,6 +227,17 @@ await check("registering with the emailed code creates a verified account and a 
   assert.ok(!code.exists, "a used sign-up code should be deleted");
 });
 
+await check("a code pasted with spaces in it still signs the student up", async () => {
+  const email = `pasted-${unique()}@example.ac.uk`;
+  await call("POST", "/auth/register/send-code", { body: { email } });
+  await plantSignupCode(email);
+  const spaced = KNOWN_CODE.split("").join(" ");
+  const { status, body } = await call("POST", "/auth/register", {
+    body: { email, password: "pasted-password-1", code: ` ${spaced} ` },
+  });
+  assert.equal(status, 201, JSON.stringify(body));
+});
+
 await check("the chosen university is kept on the new account", async () => {
   const email = `dev-${unique()}@ox.ac.uk`;
   const { status, body } = await registerStudent({
@@ -294,6 +307,24 @@ await check("a sign-up code stops working after too many wrong guesses", async (
   });
   assert.equal(status, 429, "the right code must not work once the attempts are used up");
   assert.equal(await accountExists(email), false);
+});
+
+/** Make the last code to `docPath` look two minutes old, so another may be sent at once. */
+async function skipResendWait(docPath) {
+  await db.doc(docPath).update({ sentAt: Timestamp.fromMillis(Date.now() - 2 * 60 * 1000) });
+}
+
+await check("an address can be sent at most five codes a day", async () => {
+  const email = `flooded-${unique()}@example.ac.uk`;
+  const docPath = `signupVerifications/${signupCodeId(email)}`;
+  for (let i = 0; i < 5; i += 1) {
+    const sent = await call("POST", "/auth/register/send-code", { body: { email } });
+    assert.equal(sent.status, 200, `code ${i + 1}: ${JSON.stringify(sent.body)}`);
+    await skipResendWait(docPath);
+  }
+  const sixth = await call("POST", "/auth/register/send-code", { body: { email } });
+  assert.equal(sixth.status, 429, JSON.stringify(sixth.body));
+  assert.match(sixth.body.error.message, /5 codes have already been sent/);
 });
 
 await check("asking for another sign-up code straight away is refused", async () => {
@@ -509,6 +540,23 @@ await check("guessing a signed-in account's current password locks it too", asyn
     statuses.push(status);
   }
   assert.deepEqual(statuses, [401, 401, 401, 401, 429]);
+});
+
+await check("resetting a forgotten password lifts a lock", async () => {
+  const email = `locked-out-${unique()}@example.com`;
+  const reg = await call("POST", "/auth/register-admin", {
+    body: { email, password: guessPassword, organisationName: "Locked Ltd", tosAccepted: true },
+  });
+  for (let i = 0; i < 5; i += 1) await signInAs(email, "not-the-password");
+  assert.equal((await signInAs(email, guessPassword)).status, 429);
+
+  await call("POST", "/auth/password-reset/send-code", { body: { email } });
+  await plantResetCode(email, reg.body.user.id);
+  const reset = await call("POST", "/auth/password-reset", {
+    body: { email, code: KNOWN_CODE, newPassword: "a-fresh-password-1" },
+  });
+  assert.equal(reset.status, 200, JSON.stringify(reset.body));
+  assert.equal((await signInAs(email, "a-fresh-password-1")).status, 200);
 });
 
 group("Own account");
@@ -1428,6 +1476,125 @@ await check("an organisation signed up in the app is locked until its first paym
   } finally {
     env.stripe.billNewOrganisations = false;
   }
+});
+
+group("Forgot password");
+
+/** Make KNOWN_CODE the right answer to the reset code just sent to `email`. */
+async function plantResetCode(email, uid) {
+  await db
+    .collection("passwordResets")
+    .doc(resetCodeId(email))
+    .update({ codeHash: hashCode(uid, KNOWN_CODE) });
+}
+
+const forgetfulEmail = `forgetful-${unique()}@example.ac.uk`;
+const forgetfulPassword = "forgetful-password-1";
+let forgetfulUid;
+let forgetfulToken;
+
+await check("asking for a reset code says the same whether or not the account exists", async () => {
+  const reg = await registerStudent({ email: forgetfulEmail, password: forgetfulPassword });
+  assert.equal(reg.status, 201, JSON.stringify(reg.body));
+  forgetfulUid = reg.body.user.id;
+  forgetfulToken = reg.body.session.idToken;
+
+  const unknownEmail = `nobody-${unique()}@example.ac.uk`;
+  const known = await call("POST", "/auth/password-reset/send-code", {
+    body: { email: forgetfulEmail },
+  });
+  const unknown = await call("POST", "/auth/password-reset/send-code", {
+    body: { email: unknownEmail },
+  });
+  assert.equal(known.status, 200, JSON.stringify(known.body));
+  assert.equal(unknown.status, known.status);
+  assert.equal(
+    unknown.body.message.replace(unknownEmail, "X"),
+    known.body.message.replace(forgetfulEmail, "X")
+  );
+
+  const sent = await db.collection("passwordResets").doc(resetCodeId(forgetfulEmail)).get();
+  const notSent = await db.collection("passwordResets").doc(resetCodeId(unknownEmail)).get();
+  assert.ok(sent.exists, "a code should be waiting for the real account");
+  assert.ok(!notSent.exists, "nothing should be sent to an address with no account");
+});
+
+await check("asking again straight away still gives the same answer", async () => {
+  const again = await call("POST", "/auth/password-reset/send-code", {
+    body: { email: forgetfulEmail },
+  });
+  assert.equal(again.status, 200, "a resend cooldown would give the account away");
+});
+
+await check("a wrong reset code is refused and the password is unchanged", async () => {
+  await plantResetCode(forgetfulEmail, forgetfulUid);
+  const { status } = await call("POST", "/auth/password-reset", {
+    body: { email: forgetfulEmail, code: "000000", newPassword: "brand-new-password-1" },
+  });
+  assert.equal(status, 400);
+  const login = await call("POST", "/auth/login", {
+    body: { email: forgetfulEmail, password: forgetfulPassword },
+  });
+  assert.equal(login.status, 200, "the old password should still work");
+});
+
+await check("resetting to the current password is refused, and the code still works", async () => {
+  const { status, body } = await call("POST", "/auth/password-reset", {
+    body: { email: forgetfulEmail, code: KNOWN_CODE, newPassword: forgetfulPassword },
+  });
+  assert.equal(status, 400, JSON.stringify(body));
+  assert.match(body.error.message, /already your password/);
+  const stillThere = await db.collection("passwordResets").doc(resetCodeId(forgetfulEmail)).get();
+  assert.ok(stillThere.exists, "the code should not be used up by a refused password");
+});
+
+await check("the emailed code resets the password and signs the account out everywhere", async () => {
+  const { status, body } = await call("POST", "/auth/password-reset", {
+    body: { email: forgetfulEmail, code: KNOWN_CODE, newPassword: "brand-new-password-1" },
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+
+  const oldPassword = await call("POST", "/auth/login", {
+    body: { email: forgetfulEmail, password: forgetfulPassword },
+  });
+  assert.equal(oldPassword.status, 401);
+  const newPassword = await call("POST", "/auth/login", {
+    body: { email: forgetfulEmail, password: "brand-new-password-1" },
+  });
+  assert.equal(newPassword.status, 200, JSON.stringify(newPassword.body));
+
+  const oldSession = await call("GET", "/users/me", { token: forgetfulToken });
+  assert.equal(oldSession.status, 401, "sessions from before the reset must end");
+});
+
+await check("a reset code works only once", async () => {
+  const { status } = await call("POST", "/auth/password-reset", {
+    body: { email: forgetfulEmail, code: KNOWN_CODE, newPassword: "yet-another-password-1" },
+  });
+  assert.equal(status, 400);
+});
+
+await check("a reset address over its daily limit still gets the usual answer", async () => {
+  const docPath = `passwordResets/${resetCodeId(forgetfulEmail)}`;
+  const answers = [];
+  for (let i = 0; i < 6; i += 1) {
+    const sent = await call("POST", "/auth/password-reset/send-code", {
+      body: { email: forgetfulEmail },
+    });
+    answers.push(`${sent.status} ${sent.body.message}`);
+    await skipResendWait(docPath).catch(() => {});
+  }
+  assert.equal(new Set(answers).size, 1, "every answer should be identical");
+  const stored = (await db.doc(docPath).get()).data();
+  assert.equal(stored.recentSends.length, 5, "the sixth code must not have been sent");
+});
+
+await check("an address with no account cannot be reset", async () => {
+  const { status, body } = await call("POST", "/auth/password-reset", {
+    body: { email: `nobody-${unique()}@example.ac.uk`, code: KNOWN_CODE, newPassword: "whatever-password-1" },
+  });
+  assert.equal(status, 400);
+  assert.match(body.error.message, /no code waiting/i);
 });
 
 group("Account deletion");

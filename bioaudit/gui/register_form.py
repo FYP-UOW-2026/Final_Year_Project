@@ -19,6 +19,7 @@ import time
 from typing import Optional
 
 from ..api import ApiClient, ApiClientError
+from .formatting import tidy_code
 from .theme import ERROR_TEXT, SUCCESS_TEXT
 
 NOT_LISTED = "My university isn't listed"
@@ -165,7 +166,10 @@ def make_register_form(base_url: str):
 
             self.stu_code = QLineEdit()
             self.stu_code.setPlaceholderText("Six-digit code from the email")
-            self.stu_code.setMaxLength(6)
+            # No six-character limit: it would cut a pasted "1 2 3 4 5 6" down to "1 2 3"
+            # before it could be tidied to its digits.
+            self.stu_code.textEdited.connect(
+                lambda text: text != tidy_code(text) and self.stu_code.setText(tidy_code(text)))
             self.send_code_btn = QPushButton("Send code")
             self.send_code_btn.setCursor(Qt.PointingHandCursor)
             self.send_code_btn.clicked.connect(self._send_code)

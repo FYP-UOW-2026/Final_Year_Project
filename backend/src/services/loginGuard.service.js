@@ -93,6 +93,11 @@ async function guarded(email, check) {
   return result;
 }
 
+/** After a password reset: the code proved the inbox, so the owner is not kept waiting. */
+export async function clearLock(email) {
+  await recordFor(email).delete();
+}
+
 export function signIn(email, password) {
   return guarded(email, () => firebaseAuth.signInWithPassword(email, password));
 }

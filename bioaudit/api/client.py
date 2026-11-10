@@ -299,7 +299,7 @@ class ApiClient:
         if university_id:
             payload["universityId"] = university_id
         if code:
-            payload["code"] = code.strip()
+            payload["code"] = _clean_code(code)
         if invitation_token:
             payload["invitationToken"] = invitation_token.strip()
 
@@ -349,6 +349,25 @@ class ApiClient:
                              authenticated=False)
         self.session = Session.from_payload(data["session"])
 
+    def send_password_reset_code(self, email: str) -> str:
+        """Ask for a password reset code to be emailed. Returns the server's message.
+
+        The answer is the same whether or not the address has an account, so this
+        never says which it is.
+        """
+        data = self._request("POST", "/auth/password-reset/send-code",
+                             body={"email": email}, authenticated=False)
+        return data.get("message", "")
+
+    def reset_password(self, email: str, code: str, new_password: str) -> str:
+        """Set a new password with the emailed code. Every session is signed out, so
+        sign in again afterwards. Returns the server's message."""
+        data = self._request("POST", "/auth/password-reset",
+                             body={"email": email, "code": _clean_code(code),
+                                   "newPassword": new_password},
+                             authenticated=False)
+        return data.get("message", "")
+
     def logout(self) -> None:
         """End the session on the server as well as locally.
 
@@ -394,7 +413,7 @@ class ApiClient:
     def verify_student_code(self, code: str) -> Account:
         """Confirm the university email with the code from the email."""
         data = self._request("POST", "/users/me/student-verification/verify",
-                             body={"code": code.strip()})
+                             body={"code": _clean_code(code)})
         self.account = Account.from_payload(data["user"])
         return self.account
 
@@ -675,3 +694,8 @@ def _iso(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat().replace(
         "+00:00", "Z"
     )
+
+
+def _clean_code(code: str) -> str:
+    """A verification code without the spaces or dashes copying it can bring along."""
+    return "".join(code.split()).replace("-", "")

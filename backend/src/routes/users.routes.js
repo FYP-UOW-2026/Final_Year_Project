@@ -13,7 +13,8 @@ import { z } from "zod";
 import { env } from "../config/env.js";
 
 import { loadProfile, requireAuth } from "../middleware/auth.js";
-import { validate } from "../middleware/validate.js";
+import { codeEmailLimiter } from "../middleware/rateLimits.js";
+import { validate, verificationCodeSchema } from "../middleware/validate.js";
 import * as email from "../services/email.service.js";
 import * as loginGuard from "../services/loginGuard.service.js";
 import * as organisations from "../services/organisations.service.js";
@@ -114,6 +115,7 @@ router.get(
 router.post(
   "/me/student-verification/send",
   verificationLimiter,
+  codeEmailLimiter,
   validate({
     // Optional: lets an account pick (or change) its university before the code goes
     // out. null means "my university isn't listed".
@@ -141,10 +143,7 @@ router.post(
   verificationLimiter,
   validate({
     body: z.object({
-      code: z
-        .string()
-        .trim()
-        .regex(/^\d{6}$/, "Enter the six-digit code from the email."),
+      code: verificationCodeSchema,
     }),
   }),
   asyncHandler(async (req, res) => {

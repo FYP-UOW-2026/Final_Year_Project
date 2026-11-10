@@ -2,7 +2,7 @@
 
 import datetime
 
-from bioaudit.gui.formatting import format_when, severity_summary
+from bioaudit.gui.formatting import format_when, severity_summary, tidy_code
 
 
 def test_firestore_timestamp_becomes_a_readable_date():
@@ -25,3 +25,13 @@ def test_missing_or_unknown_values_do_not_leak_raw_data():
 def test_severity_counts_read_as_words():
     assert severity_summary({"high": 2, "low": 1, "medium": 0}) == "2 High, 1 Low"
     assert severity_summary({}) == "no findings"
+
+
+def test_a_pasted_code_is_reduced_to_its_six_digits():
+    # Copied out of an email, a code can arrive spaced out or with the line around it.
+    assert tidy_code("123456") == "123456"
+    assert tidy_code("1 2 3 4 5 6") == "123456"
+    assert tidy_code("123 456\n") == "123456"
+    assert tidy_code("123-456") == "123456"
+    assert tidy_code("Your code: 048213") == "048213"
+    assert tidy_code("1234567") == "123456"
