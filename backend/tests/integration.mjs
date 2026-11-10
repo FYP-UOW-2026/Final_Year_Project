@@ -307,7 +307,7 @@ await check("only the owner, holding the code, is told the address already has a
 await check("setting up a team needs the code emailed to that address", async () => {
   const email = `teamless-${unique()}@example.com`;
   const { status, body } = await call("POST", "/auth/register-admin", {
-    body: { email, password: "teamless-password-1", organisationName: "No Code Ltd" },
+    body: { email, password: "teamless-Password-1!", organisationName: "No Code Ltd" },
   });
   assert.equal(status, 400);
   assert.match(body.error.message, /Confirm your email first/);
@@ -984,7 +984,7 @@ await check("the same invitation token cannot be used twice", async () => {
 await check("a solo organisation's owner can scan until a second person joins", async () => {
   const soloEmail = `solo-${unique()}@example.com`;
   const reg = await registerTeam({
-    body: { email: soloEmail, password: "solo-password-1", organisationName: "One Person Ltd", solo: true },
+    body: { email: soloEmail, password: "solo-Password-1!", organisationName: "One Person Ltd", solo: true },
   });
   assert.equal(reg.status, 201, JSON.stringify(reg.body));
   const soloToken = reg.body.session.idToken;
@@ -1472,7 +1472,7 @@ await check("an organisation signed up in the app is locked until its first paym
   try {
     const email = `payer-${unique()}@example.com`;
     const reg = await registerTeam({
-      body: { email, password: "payer-password-1", organisationName: "Paying Ltd", tosAccepted: true },
+      body: { email, password: "payer-Password-1!", organisationName: "Paying Ltd", tosAccepted: true },
     });
     assert.equal(reg.status, 201, JSON.stringify(reg.body));
     const token = reg.body.session.idToken;

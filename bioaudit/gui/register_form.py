@@ -254,9 +254,7 @@ def make_register_form(base_url: str):
         def _team_details(self):
             """(problem, email). problem is a message to show, or None."""
             email = self.team_email.text().strip()
-            if not email:
-                return "Enter your work email address.", email
-            return None, email
+            return email_message(email), email
 
         def _code_row(self):
             """A code field and its Send code button, plus the line under them that says
@@ -308,9 +306,11 @@ def make_register_form(base_url: str):
                 sent = ApiClient(base_url).send_signup_code(
                     email, university_id, account_type=account_type)
             except ApiClientError as exc:
-                route_api_error(exc, {"email": self.stu_email},
-                                lambda text: self._show_code_status(text, error=True),
-                                overrides={409: ("email_taken", self.stu_email)})
+                email_field = self.team_email if account_type == "team" else self.stu_email
+                route_api_error(exc, {"email": email_field},
+                                lambda text: self._show_code_status(
+                                    text, error=True, label=status_label),
+                                overrides={409: ("email_taken", email_field)})
                 return
             finally:
                 self.setCursor(Qt.ArrowCursor)
