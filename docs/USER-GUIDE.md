@@ -54,7 +54,7 @@ The first thing you see is a welcome screen with three tabs:
 
 | Tab | Use it when |
 |---|---|
-| **Create account** | You are new. As a student, pick your university, enter your university email and a password (twice, to catch typos), then press **Send code** and type in the six-digit code we email you. Tick **I accept the Terms of Use**, and your account is created once the code checks out. If the address turns out not to exist, the form tells you within a minute or two, so fix it and press **Send again**. Setting up a team instead? Choose **I'm setting up a team**. |
+| **Create account** | You are new. As a student, pick your university, enter your university email and a password (twice, to catch typos), then press **Send code** and type in the six-digit code we email you. Tick **I accept the Terms of Use**, and your account is created once the code checks out. If the address turns out not to exist, the form tells you within a minute or two, so fix it and press **Send again**. Setting up a team instead? Choose **I'm setting up a team**, which works the same way with your work email. If you already have an account, no code comes: you get an email saying so instead, so sign in or use **Forgot password?**. |
 | **Join with an invite** | An admin sent you an invitation token for their team. Any email address works here. |
 | **Sign in** | You already have an account. Forgotten your password? Click **Forgot password?** under the password box, press **Send code**, and enter the six-digit code we email you along with a new password. Resetting signs you out on every other device. |
 

@@ -161,7 +161,7 @@ All paths are prefixed with `/api`. Every endpoint except registration, login, a
 | POST | `/auth/register/send-code` | Unregistered: email the code a student signs up with |
 | POST | `/auth/register/code-status` | Unregistered: whether that code bounced |
 | POST | `/auth/register` | Unregistered: Register user account (a student with that code, or an invitee with their invitation token) |
-| POST | `/auth/register-admin` | Admin: Register admin account (also creates the organisation) |
+| POST | `/auth/register-admin` | Admin: Register admin account (also creates the organisation). Needs the `code` from `send-code` with `accountType: "team"` |
 | POST | `/auth/login` | User: Log in |
 | POST | `/auth/password-reset/send-code` | User: Forgot password, step 1. Emails a six-digit code if the address has an account; the answer is the same either way |
 | POST | `/auth/password-reset` | User: Forgot password, step 2. `{ email, code, newPassword }` sets the password and signs out every session |
@@ -192,8 +192,8 @@ that university issues; "my university isn't listed" falls back to the domain ch
 is two calls:
 
 1. `POST /auth/register/send-code` with `{ email, universityId? }` emails a six-digit code. It is
-   refused for a non-university address, an address outside the chosen university, one that
-   already has an account, or one whose domain does not receive mail according to DNS (MX
+   refused for a non-university address, an address outside the chosen university, or one
+   whose domain does not receive mail according to DNS (MX
    records, or the domain's own address if it has none). That last check catches typos such as
    `ox.ac.ku`. It cannot tell whether the mailbox itself exists, which is why the code is still
    what proves the address, and why the success message repeats the address for the student to
@@ -207,6 +207,14 @@ is two calls:
    mailboxes exist.
 3. `POST /auth/register` with `{ email, password, displayName?, universityId?, code }` creates the
    account already verified and returns `{ user, session }`. Without a right code nothing is created.
+
+**Sign-up never reveals who has an account.** `send-code` answers an address that already has
+an account exactly as it answers a new one: same message, same fields, same limits. The owner is
+emailed "You already have a BioAudit account" (sign in, or use Forgot password) instead of a
+code. "You already have an account" is only ever said to someone who entered the right code,
+so only the owner of the address. Team admins sign up the same way: `send-code` with
+`accountType: "team"` (any address, no university needed), then `register-admin` with the
+`code`.
 
 **Bounces** are reported by Mailgun to `POST /webhooks/mailgun`. Each code email carries its code
 document and a random `sendId` as Mailgun variables, and a report only marks that exact send, and

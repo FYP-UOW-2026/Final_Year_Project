@@ -37,6 +37,8 @@ export async function getProfile(uid) {
  *
  * `studentVerified` is for a student whose address was proved with a sign-up code
  * before calling this (see POST /auth/register), so the account starts out verified.
+ * `emailVerified` marks the address as proved in Firebase too; it follows
+ * `studentVerified` unless given, as for a team admin who proved it the same way.
  */
 export async function createAccount({
   email,
@@ -46,6 +48,7 @@ export async function createAccount({
   organisationId = null,
   universityId = null,
   studentVerified = false,
+  emailVerified = studentVerified,
   tosVersion = null,
 }) {
   let userRecord;
@@ -54,7 +57,7 @@ export async function createAccount({
       email,
       password,
       displayName,
-      emailVerified: studentVerified,
+      emailVerified,
     });
   } catch (error) {
     if (error.code === "auth/email-already-exists") {

@@ -138,8 +138,10 @@ def cmd_register(args, cfg: Config) -> int:
     client = ApiClient(server)
     try:
         if args.organisation:
+            # A team admin proves the address with a code first, as a student does.
+            code = args.code or _send_and_prompt(client, args.email, account_type="team")
             client.register_admin(args.email, password, args.organisation, args.name,
-                                  tos_accepted=True, solo=args.solo)
+                                  tos_accepted=True, solo=args.solo, code=code)
         elif args.join_token:
             # Creates the account and joins the team in one step, matching the GUI.
             client.register(args.email, password, args.name,
@@ -147,11 +149,8 @@ def cmd_register(args, cfg: Config) -> int:
         else:
             # A student account is only created once the university email is proved,
             # so the code comes first. --code skips sending one, for a code already had.
-            code = args.code
-            if not code:
-                sent = client.send_signup_code(args.email, args.university)
-                print(sent.get("message", ""))
-                code = _prompt_signup_code(client, args.email, sent.get("sendId"))
+            code = args.code or _send_and_prompt(client, args.email,
+                                                 university_id=args.university)
             client.register(args.email, password, args.name,
                             university_id=args.university, code=code, tos_accepted=True)
     except ApiClientError as exc:
@@ -163,6 +162,14 @@ def cmd_register(args, cfg: Config) -> int:
     print(f"Registered and signed in as {client.account.email} ({client.account.tier}"
           f"{', admin' if client.account.is_admin else ''}).")
     return 0
+
+
+def _send_and_prompt(client: ApiClient, email: str, university_id: str | None = None,
+                     account_type: str = "student") -> str:
+    """Email a sign-up code to `email`, then ask for it."""
+    sent = client.send_signup_code(email, university_id, account_type=account_type)
+    print(sent.get("message", ""))
+    return _prompt_signup_code(client, email, sent.get("sendId"))
 
 
 def _prompt_signup_code(client: ApiClient, email: str, send_id: str | None) -> str:
@@ -558,7 +565,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="your university's id from GET /api/universities; the email "
                         "must be one it issues (student accounts)")
     r.add_argument("--code", help="the six-digit code already emailed to you; omit to "
-                                  "have one sent and be prompted for it (student accounts)")
+                                  "have one sent and be prompted for it")
     r.add_argument("--accept-terms", action="store_true",
                    help="accept the Terms of Use (docs/TERMS.md) without being prompted")
     r.set_defaults(func=cmd_register)

@@ -544,31 +544,62 @@ export function assertStudentEmail(address, universityId) {
   }
 }
 
-/**
- * Refuse an address that already has an account. Checked before a code is sent, so
- * nobody is mailed a code that could never be used, and again when one is entered.
- */
-async function assertNoAccount(address) {
+async function accountExists(address) {
   try {
     await auth.getUserByEmail(address);
+    return true;
   } catch (error) {
-    if (error.code === "auth/user-not-found") return;
+    if (error.code === "auth/user-not-found") return false;
     throw error;
   }
-  throw ApiError.conflict("An account already exists for that email address.");
 }
 
 /**
- * Email the code a student signs up with, replacing any earlier one for the address.
- * The sendId it resolves with is what signupCodeStatus asks about.
+ * Refuse an address that already has an account. Only ever reached by someone holding
+ * the right sign-up code, so only the owner of the address can learn this.
  */
-export async function sendSignupCode({ email: address, universityId = null }) {
-  assertStudentEmail(address, universityId);
-  await assertNoAccount(address);
+async function assertNoAccount(address) {
+  if (await accountExists(address)) {
+    throw ApiError.conflict(
+      "You already have an account with this email address. Sign in, or use Forgot " +
+        "password? on the sign-in screen."
+    );
+  }
+}
+
+/**
+ * Email the code someone signs up with, replacing any earlier one for the address.
+ * `accountType` is "student" (a university address is required) or "team". The sendId
+ * it resolves with is what signupCodeStatus asks about.
+ *
+ * An address that already has an account is answered exactly like a new one, with the
+ * same cooldowns and limits, so sign-up cannot be used to find out who has an account.
+ * Its owner is emailed a notice saying they already have one, instead of the code. A
+ * code is still stored, so that everything after this behaves the same too, but it is
+ * never sent, so it cannot be entered.
+ */
+export async function sendSignupCode({
+  email: address,
+  universityId = null,
+  accountType = "student",
+}) {
+  if (accountType === "student") assertStudentEmail(address, universityId);
+
+  let send = studentEmailTo(address, universityId);
+  let kind = "Student verification";
+  if (await accountExists(address)) {
+    send = ({ variables }) => email.sendAccountExistsNotice({ to: address, variables });
+    kind = "Sign-up (this address already has an account, so this code was not emailed)";
+  } else if (accountType === "team") {
+    send = (message) => email.sendTeamSignupCode({ to: address, ...message });
+    kind = "Team sign-up";
+  }
+
   const { delivered, sendId } = await issueCode(signupCodes().doc(signupCodeId(address)), {
     to: address,
     key: address,
-    send: studentEmailTo(address, universityId),
+    send,
+    kind,
   });
   return { delivered, sendId, expiresInMinutes: CODE_TTL_MINUTES };
 }
@@ -591,7 +622,11 @@ export async function signupCodeStatus(address, sendId) {
 }
 
 /**
- * Check the code a student signs up with, throwing unless it is right.
+ * Check the code someone signs up with, throwing unless it is right.
+ *
+ * The code is checked before whether the address already has an account, so only the
+ * owner of the address, who has the code, can be told that. Anyone else gets the same
+ * "wrong code" or "no code" answer as for any other address.
  *
  * A right code is left in place for the caller to discard once the account exists, so a
  * sign-up that fails after this point (a Firebase hiccup, say) can be retried without
@@ -599,13 +634,13 @@ export async function signupCodeStatus(address, sendId) {
  * that exists, assertNoAccount turns the code away.
  */
 export async function checkSignupCode(address, code) {
-  await assertNoAccount(address);
   await checkCode(signupCodes().doc(signupCodeId(address)), {
     email: address,
     key: address,
     code,
     onMatch() {},
   });
+  await assertNoAccount(address);
 }
 
 export async function discardSignupCode(address) {

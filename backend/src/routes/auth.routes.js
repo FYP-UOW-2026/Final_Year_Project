@@ -55,18 +55,29 @@ const passwordSchema = z
 const universityIdSchema = z.string().trim().min(1).max(60).optional();
 
 /**
- * POST /api/auth/register/send-code -- the first step of registering a student
+ * POST /api/auth/register/send-code -- the first step of signing up
  *
- * Emails the six-digit code that POST /auth/register needs. The address must be one the
- * chosen university issues (or, with none chosen, at a recognised academic domain) and
- * must not have an account yet. Public, since there is no account yet, so it shares the
- * sign-in limit; each address can also be sent a code only once a minute.
+ * Emails the six-digit code that POST /auth/register (a student) or
+ * POST /auth/register-admin (`accountType: "team"`) needs. A student's address must be
+ * one the chosen university issues (or, with none chosen, at a recognised academic
+ * domain). Public, since there is no account yet, so it shares the sign-in limit, and
+ * each address can be sent only one code a minute and five a day.
+ *
+ * The answer is the same whether or not the address already has an account, so this
+ * cannot be used to find out who does; that owner is emailed a notice instead of a code
+ * (see sendSignupCode).
  */
 router.post(
   "/register/send-code",
   authLimiter,
   codeEmailLimiter,
-  validate({ body: z.object({ email: emailSchema, universityId: universityIdSchema }) }),
+  validate({
+    body: z.object({
+      email: emailSchema,
+      universityId: universityIdSchema,
+      accountType: z.enum(["student", "team"]).default("student"),
+    }),
+  }),
   asyncHandler(async (req, res) => {
     const { delivered, sendId, expiresInMinutes } = await studentVerification.sendSignupCode(
       req.body
@@ -230,7 +241,8 @@ async function registerInvitee(req, res) {
  * POST /api/auth/register-admin -- Register admin account
  *
  * An admin account only means anything alongside an organisation to administer, so this
- * creates both together and makes the new account its owner.
+ * creates both together and makes the new account its owner. Like a student, the admin
+ * proves the address first with the code from POST /auth/register/send-code.
  */
 router.post(
   "/register-admin",
@@ -244,16 +256,31 @@ router.post(
       organisationName: z.string().trim().min(2, "Give your organisation a name.").max(120),
       // A freelancer's one-person team: its owner may also run scans (see denyAdmin).
       solo: z.boolean().optional(),
+      // From POST /auth/register/send-code with accountType "team".
+      code: verificationCodeSchema.optional(),
     }),
   }),
   asyncHandler(async (req, res) => {
+    // Proving the address first is what stops this from telling anyone whether it
+    // already has an account (see checkSignupCode), and stops a team being set up
+    // under someone else's email.
+    if (!req.body.code) {
+      throw ApiError.badRequest(
+        "Confirm your email first: request a code, then enter the six-digit code from " +
+          "the email."
+      );
+    }
+    await studentVerification.checkSignupCode(req.body.email, req.body.code);
+
     const profile = await usersService.createAccount({
       email: req.body.email,
       password: req.body.password,
       displayName: req.body.displayName,
       role: ROLES.ADMIN,
       tosVersion: TOS_VERSION,
+      emailVerified: true,
     });
+    await studentVerification.discardSignupCode(req.body.email);
 
     const organisation = await organisations.createOrganisation({
       name: req.body.organisationName,
