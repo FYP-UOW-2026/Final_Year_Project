@@ -265,14 +265,13 @@ router.get(
 );
 
 /**
- * GET /api/scans/:scanId/report -- Export scan report (team accounts)
+ * GET /api/scans/:scanId/report -- Export scan report (any signed-in account, own scans)
  *
  * Returns HTML. The desktop app converts it to PDF locally, which avoids shipping a
  * rendering engine with this service.
  */
 router.get(
   "/:scanId/report",
-  requireTeam,
   validate({
     params: z.object({ scanId: z.string().min(1) }),
     // Not z.coerce.boolean(): that turns any non-empty string, "false" included, into true.

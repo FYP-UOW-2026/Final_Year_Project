@@ -345,7 +345,13 @@ export async function reviewFlag({ orgId, flagId, decision, note, reviewedBy }) 
     throw ApiError.conflict(`That flag has already been ${flag.status}.`);
   }
 
-  const status = decision === "dismiss" ? FLAG_STATUS.DISMISSED : FLAG_STATUS.REVIEWED;
+  // "uphold"/"dismiss" are accepted for older clients; new ones send "resolve".
+  const status =
+    decision === "dismiss"
+      ? FLAG_STATUS.DISMISSED
+      : decision === "uphold"
+        ? FLAG_STATUS.REVIEWED
+        : FLAG_STATUS.RESOLVED;
   await ref.update({
     status,
     reviewNote: note ?? null,

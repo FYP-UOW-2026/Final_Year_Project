@@ -64,6 +64,7 @@ export const FLAG_STATUS = {
   OPEN: "open",
   REVIEWED: "reviewed",
   DISMISSED: "dismissed",
+  RESOLVED: "resolved",
 };
 
 /** Ordered so a report can sort most serious first. */

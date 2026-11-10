@@ -735,16 +735,13 @@ def make_team_tab(parent_window, palette: dict):
             layout.addWidget(self.flags_table, 1)
 
             buttons = QHBoxLayout()
-            self.uphold_btn = QPushButton("Uphold")
-            self.uphold_btn.clicked.connect(lambda: self._review("uphold"))
-            self.dismiss_btn = QPushButton("Dismiss")
-            self.dismiss_btn.clicked.connect(lambda: self._review("dismiss"))
-            self.show_all_flags = QPushButton("Show reviewed too")
+            self.resolve_btn = QPushButton("Mark as resolved")
+            self.resolve_btn.clicked.connect(lambda: self._review("resolve"))
+            self.show_all_flags = QPushButton("Include resolved flags")
             self.show_all_flags.setCheckable(True)
             self.show_all_flags.clicked.connect(self._load_flags)
-            for b in (self.uphold_btn, self.dismiss_btn):
-                b.setEnabled(False)
-                buttons.addWidget(b)
+            self.resolve_btn.setEnabled(False)
+            buttons.addWidget(self.resolve_btn)
             buttons.addWidget(self.show_all_flags)
             buttons.addStretch(1)
             layout.addLayout(buttons)
@@ -763,8 +760,7 @@ def make_team_tab(parent_window, palette: dict):
             row = self.flags_table.currentRow()
             status = self.flags_table.item(row, 2).text() if row >= 0 else ""
             open_flag = status == "open"
-            self.uphold_btn.setEnabled(open_flag)
-            self.dismiss_btn.setEnabled(open_flag)
+            self.resolve_btn.setEnabled(open_flag)
 
         def _load_flags(self) -> None:
             status = "all" if self.show_all_flags.isChecked() else "open"
@@ -782,7 +778,7 @@ def make_team_tab(parent_window, palette: dict):
             if not flag_id:
                 return
             note, ok = QInputDialog.getText(
-                self, f"{decision.capitalize()} flag", "Note (optional):")
+                self, "Mark flag as resolved", "Note (optional):")
             if not ok:
                 return
             try:
@@ -792,7 +788,7 @@ def make_team_tab(parent_window, palette: dict):
                 return self._fail("Could not review that flag", exc)
             finally:
                 self._busy(False)
-            self._status(f"Flag {decision}d.")
+            self._status("Flag resolved.")
             self._load_flags()
             self._load_audit()
 

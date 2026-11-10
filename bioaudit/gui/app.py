@@ -173,7 +173,7 @@ def run(cfg: Config | None = None) -> int:
     _install_crash_logging()
 
     from PySide6.QtCore import Qt, QPoint, QRect, QSize
-    from PySide6.QtGui import QAction, QBrush, QColor, QDesktopServices, QIcon, QPainter, QPen
+    from PySide6.QtGui import QAction, QBrush, QColor, QDesktopServices, QIcon, QPainter, QPen, QPixmap
     from PySide6.QtCore import QUrl
     from PySide6.QtWidgets import (
         QApplication, QButtonGroup, QCheckBox, QComboBox, QCompleter, QFileDialog, QFormLayout,
@@ -332,6 +332,18 @@ def run(cfg: Config | None = None) -> int:
         _base = Path(os.path.expanduser("~")) / "BioAudit"
         _log_diag(f"could not set up writable output dir: {exc}")
 
+    def _brand_logo(size: int, dpr: float = 1.0):
+        """Brand mark scaled in device pixels so it stays sharp on HiDPI screens;
+        None if the asset is missing."""
+        path = os.path.join(os.path.dirname(__file__), "assets", "logo_mark.png")
+        if not os.path.exists(path):
+            return None
+        d = max(dpr, 1.0)
+        px = QPixmap(path).scaled(int(size * d), int(size * d), Qt.KeepAspectRatio,
+                                  Qt.SmoothTransformation)
+        px.setDevicePixelRatio(d)
+        return px
+
     class MainWindow(QMainWindow):
         def __init__(self) -> None:
             super().__init__()
@@ -345,7 +357,7 @@ def run(cfg: Config | None = None) -> int:
             self._adb_thread: QThread | None = None
             self._explain_worker: Worker | None = None
             self._explain_target: dict | None = None
-            self._last_report_path: str | None = None
+            self._last_run = None
             self._job_ctx: dict | None = None
             # Set while a job runs so the worker thread can see a cancel request. An Event
             # is used rather than a plain bool because it is written on the UI thread and
@@ -485,7 +497,9 @@ def run(cfg: Config | None = None) -> int:
             brand.setContentsMargins(18, 0, 18, 0)
             brand.setSpacing(10)
             logo = QLabel()
-            logo.setPixmap(theme.icon_pixmap("shield", theme.DARK["primary"], 28))
+            logo.setFixedSize(40, 40)
+            logo.setPixmap(_brand_logo(40, logo.devicePixelRatioF()) or
+                           theme.icon_pixmap("shield", theme.DARK["primary"], 28))
             names = QVBoxLayout()
             names.setSpacing(0)
             name = QLabel("BioAudit")
@@ -817,19 +831,12 @@ def run(cfg: Config | None = None) -> int:
         def _update_save_report_buttons(self) -> None:
             """Single place the three "Save report from account" buttons get their state.
 
-            Enabled whenever there is a scan to save, regardless of account -- a student's
-            click is caught inside the handlers (_save_server_report / _save_history_report)
-            with an explanation, rather than left as a disabled control someone has to
-            guess the reason for. Called whenever the account might have changed
-            (_refresh_account_ui) and whenever the History selection changes
-            (_show_history_run), not just right after a job finishes -- otherwise a run
+            Enabled whenever there is a scan to save, for every account tier. Called
+            whenever the account might have changed (_refresh_account_ui) and whenever
+            the History selection changes (_show_history_run), not just right after a job finishes -- otherwise a run
             saved while signed out stays showing a save button with nothing behind it.
             """
-            team = bool(self.api and self.api.account and self.api.account.is_team)
-            tooltip = (
-                "Download this run's report from your account."
-                if team else
-                "Saving a report from your account is for team accounts.")
+            tooltip = "Download this run's report from your account."
 
             for btn in (self.scan_save_report_btn, self.assess_save_report_btn):
                 btn.setEnabled(bool(self.api) and bool(self._last_scan_id))
@@ -2049,12 +2056,9 @@ def run(cfg: Config | None = None) -> int:
             """
             run_ = ctx["run"]
             sync = ctx.get("sync") or {}
-            try:
-                self._last_report_path = core.write_report(run_, self.cfg)
-            except Exception as exc:  # noqa: BLE001 - findings still shown
-                self._last_report_path = None
-                _log_diag(f"write_report failed: {exc}")
-                self.statusBar().showMessage(f"Report export failed: {exc}")
+            # Nothing is written to disk here: a report is only saved when the user
+            # picks "Save report" and chooses where it goes.
+            self._last_run = run_
 
             # Prepend the sync outcome so a failed upload is visible without hiding the
             # findings, which are the point of the run.
@@ -2064,7 +2068,7 @@ def run(cfg: Config | None = None) -> int:
                 ctx["retry_btn"].setEnabled(True)
 
             ctx["results_view"].setHtml(html)
-            ctx["open_btn"].setEnabled(self._last_report_path is not None)
+            ctx["open_btn"].setEnabled(True)
             counts = run_.counts()
 
             # Coloured count badges above the report, so the shape of the result is
@@ -2268,27 +2272,9 @@ def run(cfg: Config | None = None) -> int:
             self._explain_thread = None
             self._explain_worker = None
 
-        def _team_only(self) -> bool:
-            """True on a team account; otherwise explain why not and return False.
-
-            Used by the save-report handlers, which stay clickable on a student account
-            (see _update_save_report_buttons) rather than just disabled, so the reason
-            and the way to get it are in the same dialog instead of a tooltip.
-            """
-            if self.api and self.api.account and self.api.account.is_team:
-                return True
-            QMessageBox.information(
-                self, "Team accounts only",
-                "Saving a report from your account is for team accounts.\n\n"
-                "To join a team, ask its admin for an invitation, then use "
-                "Account → Join an organisation…")
-            return False
-
         def _save_server_report(self) -> None:
-            """Team accounts. Download the report the server holds for the last saved run."""
+            """Download the report the server holds for the last saved run."""
             if self.api is None or not self._last_scan_id:
-                return
-            if not self._team_only():
                 return
             path, _ = QFileDialog.getSaveFileName(
                 self, "Save report", f"bioaudit-{self._last_scan_id}.html",
@@ -2311,7 +2297,7 @@ def run(cfg: Config | None = None) -> int:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(path)))
 
         def _save_history_report(self) -> None:
-            """Team accounts. Download the report for whichever run is selected in History.
+            """Download the report for whichever run is selected in History.
 
             Separate from _save_server_report because that one is scoped to the run just
             finished this session (self._last_scan_id); this one saves an older run picked
@@ -2319,8 +2305,6 @@ def run(cfg: Config | None = None) -> int:
             """
             index = self.history_combo.currentIndex()
             if self.api is None or not (0 <= index < len(self._history_ids)):
-                return
-            if not self._team_only():
                 return
             scan_id = self._history_ids[index]
             path, _ = QFileDialog.getSaveFileName(
@@ -2367,13 +2351,24 @@ def run(cfg: Config | None = None) -> int:
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
         def _open_last_report(self) -> None:
-            if self._last_report_path and os.path.exists(self._last_report_path):
-                QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(self._last_report_path)))
-            else:
-                QMessageBox.information(self, "No report", "No report file is available yet.")
+            """View the last run in the browser from a temp file; nothing is saved."""
+            if self._last_run is None:
+                QMessageBox.information(self, "No report", "No report is available yet.")
+                return
+            try:
+                path = os.path.join(tempfile.gettempdir(), "bioaudit-last-report.html")
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(generator.render_html(self._last_run, dark=False))
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(self, "Could not open the report", str(exc))
+                return
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("BioAudit")
+    _icon = _brand_logo(256)
+    if _icon is not None:
+        app.setWindowIcon(QIcon(_icon))
 
     window = None
 
