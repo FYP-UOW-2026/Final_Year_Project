@@ -75,7 +75,11 @@ backend/src/
     validate.js       zod request validation
     errorHandler.js   one response shape for every failure
   routes/             HTTP layer: paths, validation, permissions
-  services/           business logic + all Firestore access
+  services/           business logic + all Firestore access, including:
+                        groq.service.js       AI explanations (the live path)
+                        billing.service.js    the organisation subscription (Stripe)
+                        loginGuard.service.js locking an email after wrong passwords
+                        passwordReset.service.js, studentVerification.service.js
   utils/
     ApiError.js       typed errors with status codes
     asyncHandler.js   forwards async errors to the error handler
@@ -197,7 +201,7 @@ That is what makes team oversight accountable rather than just powerful.
 
 ---
 
-## 5. Two security rules that are easy to break by accident
+## 5. Three security rules that are easy to break by accident
 
 ### Never leak which accounts exist
 
@@ -219,6 +223,14 @@ password verifies, in the login route.
 
 If you add an auth-adjacent endpoint, apply the same discipline: **the error message must
 not depend on whether the account exists.**
+
+### Check passwords through `loginGuard`
+
+Five wrong passwords for one email address lock it (see §8, Rate limits). That only holds
+if every password check counts, so a route that verifies a password calls
+`loginGuard.signIn` or `loginGuard.verifyPassword`, never `firebaseAuth` directly. The only
+exceptions are the sign-ins straight after creating an account, where the password was
+just set.
 
 ### Redact before anything reaches the AI
 
@@ -302,6 +314,10 @@ pytest tests/test_api_client.py -v
 Point that at the **emulator**, not production. It registers a lot of accounts and will hit
 the sign-in rate limit (20 per 15 minutes per IP) and lock you out for a while.
 
+`node tests/aiGraph.groq.test.mjs` checks the Groq message format and the rate-limit retry
+offline. Avoid `node tests/aiGraph.test.mjs` with a real `GROQ_API_KEY` in `.env`: it
+reads that file and makes live calls.
+
 ---
 
 ## 8. Configuration and deployment
@@ -344,6 +360,21 @@ work, and both are easy to break:
 - `--allow-unauthenticated` means the *service* is reachable. It does not weaken your app's
   own auth: every route still requires a valid Firebase token.
 
+From `backend/`, redeploying the current code needs only:
+
+```bash
+gcloud run deploy bioaudit-api --source . --region us-central1 --project <your-project-id>
+```
+
+Settings the live service uses besides the Firebase ones, all kept across redeploys:
+
+| Setting | For |
+|---|---|
+| `GROQ_API_KEY`, `GROQ_MODEL` | AI explanations |
+| `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `MAILGUN_FROM` | emailing codes and invitations |
+| `STRIPE_SECRET_KEY` | the organisation subscription; mounted from the Stripe extension's secret with `--update-secrets "STRIPE_SECRET_KEY=firestore-stripe-payments-STRIPE_API_KEY:latest"` (the Cloud Run service account needs Secret Manager Secret Accessor on it) |
+| `STRIPE_PRICE_ID`, `STRIPE_RETURN_URL` | the yearly price, and where Stripe's pages return to |
+
 Add a new env var to an existing deployment without disturbing the others:
 
 ```bash
@@ -371,14 +402,27 @@ auth is deliberate — without it an attacker could try passwords as fast as the
 allows. Raise it in `.env` for heavy local testing if you must, but leave the deployed
 default alone.
 
+Those limits count per IP and per server instance, so `loginGuard.service.js` adds one per
+email address, kept in Firestore: five wrong passwords within 15 minutes
+(`LOGIN_MAX_FAILURES`) lock the address for 15 minutes (`LOGIN_LOCK_MINUTES`), doubling
+for repeat locks up to an hour. A lock refuses even the right password, counts addresses
+with no account the same way, and is cleared by a successful password reset.
+
 ### AI explanations
 
 Set `GROQ_API_KEY` and optionally `GROQ_MODEL` (default `openai/gpt-oss-120b`, one of
 Groq's free-tier chat models). Without a key the layer degrades gracefully: findings still
 get the deterministic fallback fixes from the Python engine, and `/api/health` reports
 `aiExplanations: disabled`. Get a key at console.groq.com — no card required for the free
-tier (1,000 requests/day, 30/minute as of this writing; check the console for current
-numbers, they do change).
+tier (1,000 requests/day, 30/minute and 8,000 tokens/minute as of this writing; check the
+console for current numbers, they do change).
+
+The explain routes call `groq.service.js`: **one request per finding**, with the finding
+and its guidance in the prompt and Groq's JSON mode on, about 1,000 tokens each. A 429
+asking to wait 20 seconds or less is waited out and retried; a longer wait means the daily
+limit is spent, and fails at once. `aiGraph.service.js`, a LangGraph version with tool
+calls and several providers, is not currently called: its several requests per finding
+exceed the free token limit (see backend/README.md).
 
 The key belongs **only** on the server. The Python client has no AI dependency at all — a
 local explainer existed once and was removed precisely because it only worked on whichever
@@ -402,9 +446,11 @@ account-level quota — a user can exhaust either one first.
 
 ### Email
 
-Optional, exactly like the AI layer. Set `SMTP_HOST`, `SMTP_USER` and `SMTP_PASS` to enable
-it; leave `SMTP_HOST` blank and the whole module becomes a no-op so nobody is blocked by not
-having mail credentials. For Gmail use an App Password against `smtp.gmail.com:587`.
+Needed in production, because student sign-up and password reset codes go by email. Set
+either `MAILGUN_API_KEY` and `MAILGUN_DOMAIN` (what the live service uses), or `SMTP_HOST`,
+`SMTP_USER` and `SMTP_PASS`. With neither, a development server prints codes to its log
+instead, and notification emails are skipped. For Gmail SMTP use an App Password against
+`smtp.gmail.com:587`. Test the settings with `npm run email:test -- you@example.com`.
 
 Every send is best-effort and never throws: an invitation that was created or a password
 that was changed has already succeeded, so a mail failure must not undo it.
@@ -413,3 +459,13 @@ Note what email is **not** here. BioAudit's client is a desktop app, so there is
 for an invite link to land on. The invitation email carries the **token**, which the
 recipient pastes into the app's join dialog — the same token the endpoint returns for the
 admin to pass on by hand. Emailing just saves that step; it is never the only route.
+
+### Organisation subscription
+
+An organisation's subscription is its owner's yearly Stripe subscription, which the "Run
+Payments with Stripe" Firebase extension mirrors into `customers/{uid}/subscriptions`.
+`billing.service.js` reads that mirror, and `refuseSuspendedOrganisation` in
+`middleware/auth.js` refuses every request from a suspended organisation except the few it
+needs to see why and, for an admin, to pay. Organisations signed up in the app are created
+`billingRequired` and stay locked until their first payment. The endpoints and rules are in
+backend/README.md.

@@ -1,12 +1,14 @@
 # Copy to config/config.yaml and edit. config.yaml is gitignored.
 #
 # No `ai:` section: AI explanation runs entirely on the backend now (see
-# backend/.env.example's GEMINI_API_KEY / GEMINI_MODEL), not on whichever machine
+# backend/.env.example's GROQ_API_KEY / GROQ_MODEL), not on whichever machine
 # happens to run the CLI or GUI. There is nothing to configure client-side for it.
 
 device:
   serial: null            # specific adb serial, or null to auto-select the only device
-  adb_path: adb           # path to the adb binary
+  # Path to the adb binary. Left as `adb`, it is found on PATH, in an Android SDK, or as
+  # the copy the desktop app downloads with its Download ADB button.
+  adb_path: adb
 
 runtime:
   # Number of trials per scenario for the statistical baseline.

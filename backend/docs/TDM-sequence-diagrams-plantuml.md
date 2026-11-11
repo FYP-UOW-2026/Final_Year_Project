@@ -1,6 +1,6 @@
 # BioAudit — Sequence Diagrams (PlantUML)
 
-Same six flows as `TDM-sequence-diagrams-text.md`, converted to PlantUML syntax. Solid
+Same six flows as the Mermaid diagrams in `TDM-technical-design-manual.md` §6, converted to PlantUML syntax. Solid
 arrow (`->`) = call/request/instruction; dashed arrow (`-->`) = the return value/response
 for that call, drawn sender-to-receiver (PlantUML convention, not reversed). Paste any
 block between `@startuml`/`@enduml` into plantuml.com/plantuml or a local renderer.
@@ -45,8 +45,8 @@ GUI -> API: register(email, password, code)
 API -> Firestore: check code
 API -> FBA: createUser(emailVerified)
 FBA --> API: uid
-API -> Firestore: create user doc, tier=free, role=member
-API -> FBA: setCustomUserClaims(tier, role)
+API -> Firestore: create user doc, role=member, student verified
+API -> FBA: setCustomUserClaims(role, organisationId=null)
 API --> GUI: account created, show disclosure
 User -> GUI: acknowledge disclosure
 GUI -> API: login(email, password)
@@ -89,7 +89,7 @@ GUI -> GUI: map findings to OWASP Mobile Top 10, or "Uncategorised"
 GUI -> User: display findings (severity, confidence, OWASP)
 GUI -> API: POST /scans {type: apk, findings[], authorisationConfirmed}
 API -> Firestore: scans.add(doc)
-API -> Firestore: enforceRetention(userId, tier)
+API -> Firestore: enforceRetention(userId, account type)
 Firestore --> API: saved
 API --> GUI: scan id
 note over SA, GUI: Detection stays client-side and deterministic
@@ -136,7 +136,7 @@ note over GUI, Device: No root access; black-box over standard ADB only
 @enduml
 ```
 
-## 4. View AI Explanation with tier cap (FR01 / PR01)
+## 4. View AI Explanation with student cap (FR01 / PR01)
 
 ```plantuml
 @startuml
@@ -159,19 +159,20 @@ participant API
 participant Firestore
 participant Redact
 participant "Knowledge Base" as KB
-participant Gemini
+participant Groq
 
-User -> GUI: View AI Explanation
-GUI -> API: POST /scans/:id/explain {findingId}
-API -> Firestore: read user doc (tier, aiExplanationCount)
-note over API, Firestore: If Free and count >= monthly cap, respond 403 and prompt upgrade
+User -> GUI: run with "Get AI explanations" on
+GUI -> API: POST /scans/:scanId/findings/:findingIndex/explain
+API -> Firestore: read user doc (organisationId, aiUsage)
+note over API, Firestore: A student at the monthly cap gets 403 and is told about teams; team accounts are uncapped
+API -> Firestore: spend one (student only)
 API -> Redact: redactFinding(evidence)
 Redact --> API: redacted evidence
 API -> KB: load guidance for finding.category
 KB --> API: reviewed guidance
-API -> Gemini: system prompt + redacted evidence + guidance
-Gemini --> API: {explanation, mitigation, references}
-API -> Firestore: increment aiExplanationCount (Free only)
+API -> Groq: one request: system prompt + redacted evidence + guidance (JSON mode)
+Groq --> API: {explanation, mitigation, references}
+API -> Firestore: save on the finding (refund the student if Groq failed)
 API --> GUI: explanation + fix
 GUI -> User: display explanation alongside finding
 @enduml
@@ -200,20 +201,17 @@ participant API
 participant Firestore
 participant "Firebase Auth" as FBA
 
-User -> GUI: click invite link (token)
-GUI -> API: GET /invitations/:token
+User -> GUI: paste invitation token (emailed, or passed on by the admin)
+GUI -> API: POST /auth/register {invitationToken} (new user)\nor POST /organisations/join {token} (existing user)
 API -> Firestore: invitations.where(tokenHash==hash(token), status==pending)
 Firestore --> API: invitation record (or none)
-note over API, Firestore: Expired or invalid, respond with error and request new invite
-API --> GUI: invite details (org name, prefilled email)
-User -> GUI: register/login, then acknowledge disclosure
-GUI -> API: POST /invitations/:token/accept
+note over API, Firestore: Expired, cancelled or invalid: respond with an error, ask the admin for a new invite
 API -> Firestore: transaction - org.memberIds arrayUnion(uid)
 API -> Firestore: transaction - user.organisationId = orgId
 API -> Firestore: invitation.status = accepted
 API -> FBA: setCustomUserClaims(uid, {organisationId, role})
 API -> FBA: revokeRefreshTokens(uid)
-API --> GUI: confirmation, forces re-auth on next request
+API --> GUI: confirmation; the app signs in again to pick up the team
 @enduml
 ```
 
@@ -240,8 +238,8 @@ participant API
 participant Firestore
 participant "Audit Log" as AuditLog
 
-Admin -> GUI: Flag on member's scan record
-GUI -> API: POST /organisations/:id/flags {scanId, reason}
+Admin -> GUI: Members, View their runs, Flag one of these runs
+GUI -> API: POST /organisations/:orgId/scans/:scanId/flag {reason}
 API -> Firestore: check no existing open flag for scanId
 API -> Firestore: flags.add({status: open, flaggedBy})
 API -> Firestore: scans.doc(scanId).update({flagged: true})
@@ -249,13 +247,13 @@ API -> AuditLog: record(MEMBER_DATA_FLAGGED)
 API --> GUI: confirmation
 
 Admin -> GUI: open Flagged Items
-GUI -> API: GET /organisations/:id/flags?status=open
+GUI -> API: GET /organisations/:orgId/flags?status=open
 API -> Firestore: flags.where(organisationId, status==open)
 Firestore --> API: flag list
 API --> GUI: display flags (note, date)
-Admin -> GUI: mark reviewed
-GUI -> API: PATCH /flags/:id {decision, note}
-API -> Firestore: flag.status = reviewed
+Admin -> GUI: Uphold or Dismiss
+GUI -> API: POST /organisations/:orgId/flags/:flagId/review {decision, note}
+API -> Firestore: flag.status = reviewed (upheld) or dismissed
 API -> Firestore: scans.doc(scanId).update({flagged: false})
 API -> AuditLog: record(FLAG_REVIEWED)
 API --> GUI: confirmation
@@ -291,9 +289,10 @@ entity USER {
   --
   email : string
   displayName : string
-  tier : string "free | premium"
   role : string "member | admin"
-  organisationId : string <<FK>>
+  organisationId : string <<FK>> "student if empty, team if set"
+  studentVerification : object
+  aiUsage : object "month, count"
   scanCount : int
   disabled : bool
   createdAt : timestamp
@@ -306,7 +305,18 @@ entity ORGANISATION {
   ownerId : string <<FK>>
   adminIds : array
   memberIds : array
+  solo : bool
+  billingRequired : bool
   createdAt : timestamp
+}
+
+entity SUBSCRIPTION {
+  * id : string <<PK>> "Stripe subscription id"
+  --
+  ownerId : string <<FK>> "customers/{ownerId}/subscriptions"
+  status : string "active|trialing|past_due|canceled"
+  current_period_end : timestamp
+  cancel_at_period_end : bool
 }
 
 entity INVITATION {
@@ -384,6 +394,7 @@ USER ||--o{ SCAN : "owns (userId)"
 USER }o--o{ ORGANISATION : "member of"
 USER ||--o{ AUDITLOG : "actor / subject"
 ORGANISATION ||--o{ INVITATION : "issues"
+ORGANISATION ||--o| SUBSCRIPTION : "paid through owner"
 ORGANISATION ||--o{ FLAG : "scopes"
 SCAN ||--o{ REPORT : "exported as"
 SCAN ||--o{ FLAG : "flagged by admin"

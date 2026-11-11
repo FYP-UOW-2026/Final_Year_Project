@@ -8,9 +8,11 @@ Purpose: describe BioAudit's system design through Functional Hierarchy Diagram,
 
 Two independent codebases:
 - **`bioaudit/`** (Python) — CLI, PySide6 GUI, Streamlit dashboard, scanning engine. Runs on tester's machine. Talks to Android device over ADB or reads APK file directly. Detection logic lives entirely here, deterministic, rule-based.
-- **`backend/`** (Node/Express) — REST API. No scanning logic. Owns accounts, tier status, scan history, org oversight, AI explanation proxy. Deployed Cloud Run.
+- **`backend/`** (Node/Express) — REST API. No scanning logic. Owns accounts, account type (student or team), scan history, org oversight, the organisation subscription, AI explanation proxy. Deployed Cloud Run.
 
-External dependents: **Firebase Authentication** (credentials, sessions, custom claims for tier/role/organisationId), **Cloud Firestore** (scan history, org data, invitations, flags, audit log), **Gemini API** (explanation generation only, never detection), **ADB/target Android device** (runtime probing, black-box, no root).
+External dependents: **Firebase Authentication** (credentials, sessions, custom claims for role/organisationId), **Cloud Firestore** (scan history, org data, invitations, flags, audit log), **Groq API** (explanation generation only, never detection), **Stripe** (the organisation's yearly subscription, through the "Run Payments with Stripe" Firebase extension), **Mailgun** (sign-up and password reset codes), **ADB/target Android device** (runtime probing, black-box, no root).
+
+Account types: there is no paid personal plan. A **student** account (the URS's "Free" user) is a personal account with a verified university email, capped history and a monthly AI cap. A **team** account (the URS's "Premium" user) is any member or admin of an organisation, with no caps; the organisation pays one yearly subscription for all of them. The type follows from organisation membership and is never stored.
 
 Key boundary: client does the scanning locally (device/APK are on tester's machine), backend only stores results and serves AI explanations. This is why `scans.service.js` says "the scanning itself happens in the desktop app."
 
@@ -21,9 +23,9 @@ flowchart TD
     ROOT[BioAudit]
 
     ROOT --> UNREG[Unregistered User]
-    ROOT --> USR[User — Free/Premium shared]
-    ROOT --> FREE[Free User]
-    ROOT --> PREM[Premium User]
+    ROOT --> USR[User — Student/Team shared]
+    ROOT --> FREE[Student User]
+    ROOT --> PREM[Team Member]
     ROOT --> ADM[Admin]
 
     UNREG --> UR1[Register User Account]
@@ -43,13 +45,12 @@ flowchart TD
 
     FREE --> FR1[View AI Explanation — capped monthly]
     FREE --> FR2[View Test History — capped retention]
-    FREE --> FR3[Upgrade to Premium]
+    FREE --> FR3[Join an Organisation — becomes Team]
 
     PREM --> PR1[View AI Explanation — uncapped]
     PREM --> PR2[View Test History — uncapped]
     PREM --> PR3[Compare Scan Results]
     PREM --> PR4[Export Scan Report]
-    PREM --> PR5[Cancel Subscription]
 
     ADM --> AD1[Register Admin Account]
     ADM --> AD2[Log In / Log Out / Profile Mgmt]
@@ -61,9 +62,14 @@ flowchart TD
     AD5 --> AD5c[Flag Data]
     ADM --> AD6[Review Flagged Data]
     ADM --> AD7[Add Admin]
+    ADM --> AD8[Manage Organisation Subscription]
+    AD8 --> AD8a[Pay / Renew]
+    AD8 --> AD8b[Cancel / Keep]
+    AD8 --> AD8c[Manage Billing Online]
+    ADM --> AD9[Suspend / Reinstate Member]
 ```
 
-Note: Admin branch holds no personal scanning capability — mirrors URS §2.3 ("Admin... has no personal detection or scanning capability").
+Note: Admin branch holds no personal scanning capability — mirrors URS §2.3 ("Admin... has no personal detection or scanning capability"). The URS's "Cancel Subscription" moved from the Premium user to the Admin: the subscription now belongs to the organisation, and only its admins may cancel it.
 
 ## 4. Data Flow Diagrams
 
@@ -74,7 +80,8 @@ flowchart LR
     Tester((Tester / User))
     Admin((Admin))
     Device[/Target Android App — APK or ADB device/]
-    Gemini[[Gemini API]]
+    Groq[[Groq API]]
+    Stripe[[Stripe]]
     FB[(Firebase Auth + Firestore)]
 
     Tester -->|credentials, APK, run-test commands| SYS
@@ -82,7 +89,8 @@ flowchart LR
     SYS[0.0 BioAudit System] -->|scan results, history, explanations| Tester
     SYS -->|member data, flags| Admin
     SYS <-->|probe / read manifest, logcat, allowBackup| Device
-    SYS <-->|redacted evidence -> explanation JSON| Gemini
+    SYS <-->|redacted evidence -> explanation JSON| Groq
+    SYS <-->|yearly organisation subscription| Stripe
     SYS <-->|auth tokens, profile, scans, org docs| FB
 ```
 
@@ -107,7 +115,8 @@ flowchart TD
     D4[(Firestore: organisations / invitations / flags)]
     D5[(Firestore: auditLog)]
     EXT1[/Target APK / ADB device/]
-    EXT2[[Gemini API]]
+    EXT2[[Groq API]]
+    EXT3[[Stripe]]
 
     Tester((Tester)) --> P1
     P1 <--> D1
@@ -127,11 +136,13 @@ flowchart TD
     P5 <--> D4
     P5 <--> D2
     P5 --> D5
+    P5 <--> EXT3
 ```
 
 Process notes:
 - 2.0 never writes to Firestore directly for the *finding content* logic — detection stays client-side and deterministic; only the finished `TestRun`/`Finding` payload is uploaded (US09/US10 post-conditions: "saved to the user's synced assessment history").
-- 3.0 enforces tier cap (Free monthly limit) reading/writing `users` doc before calling Gemini — matches FR01 alt flow "Monthly cap reached."
+- 3.0 enforces the student monthly cap, reading/writing the `users` doc before calling Groq — matches FR01 alt flow "Monthly cap reached." Team accounts are uncapped.
+- 5.0 also reads the organisation's Stripe subscription, and refuses requests from an organisation whose paid year ended.
 - 5.0 writes every oversight action to `auditLog` (per `audit.service.js` — append-only, no client writes).
 
 ## 5. Entity Relationship Diagram
@@ -144,6 +155,7 @@ erDiagram
     USER }o--o{ ORGANISATION : "member of (organisationId / memberIds[])"
     USER ||--o{ AUDITLOG : "actor / subject"
     ORGANISATION ||--o{ INVITATION : "issues"
+    ORGANISATION ||--o| SUBSCRIPTION : "paid through owner"
     ORGANISATION ||--o{ FLAG : "scopes"
     SCAN ||--o{ REPORT : "exported as"
     SCAN ||--o{ FLAG : "flagged by admin"
@@ -153,9 +165,10 @@ erDiagram
         string uid PK
         string email
         string displayName
-        string tier "free | premium"
         string role "member | admin"
-        string organisationId FK
+        string organisationId FK "student if empty, team if set"
+        object studentVerification "status, university, verifiedAt"
+        object aiUsage "month, count (student cap)"
         int scanCount
         bool disabled
         timestamp createdAt
@@ -167,7 +180,17 @@ erDiagram
         string ownerId FK
         array adminIds
         array memberIds
+        bool solo
+        bool billingRequired
         timestamp createdAt
+    }
+
+    SUBSCRIPTION {
+        string id PK "Stripe subscription id"
+        string ownerId FK "customers/{ownerId}/subscriptions"
+        string status "active|trialing|past_due|canceled"
+        timestamp current_period_end
+        bool cancel_at_period_end
     }
 
     INVITATION {
@@ -238,7 +261,7 @@ erDiagram
 
 ## 6. Sequence Diagrams
 
-Six flows chosen for architectural signal (auth, core detection pipeline, tier-gated AI, org oversight) — not all 30+ use cases.
+Six flows chosen for architectural signal (auth, core detection pipeline, student-capped AI, org oversight) — not all 30+ use cases.
 
 ### 6.1 Register + Login (UR01 / US01)
 
@@ -259,13 +282,13 @@ sequenceDiagram
     API->>FS: check code (5 attempts, 15 min)
     API->>FBA: createUser(emailVerified: true)
     FBA-->>API: uid
-    API->>FS: users.doc(uid).set({tier: free, role: member})
-    API->>FBA: setCustomUserClaims(uid, {tier, role})
+    API->>FS: users.doc(uid).set({role: member, studentVerification: verified})
+    API->>FBA: setCustomUserClaims(uid, {role, organisationId: null})
     API-->>GUI: account created + disclosure notice
     U->>GUI: acknowledge disclosure
     GUI->>API: POST /auth/login {email, password}
     API->>FBA: verify credentials -> ID token
-    FBA-->>API: ID token (claims: tier/role/organisationId)
+    FBA-->>API: ID token (claims: role/organisationId)
     API-->>GUI: token + profile
     GUI-->>U: dashboard displayed
 ```
@@ -288,7 +311,7 @@ sequenceDiagram
     GUI->>GUI: map findings -> OWASP Mobile Top 10 (or "Uncategorised")
     GUI-->>U: display findings (severity, confidence, OWASP)
     GUI->>API: POST /scans {type: apk, findings[], authorisationConfirmed}
-    API->>FS: scans.add(doc); enforceRetention(userId, tier)
+    API->>FS: scans.add(doc); enforceRetention(userId, account type)
     FS-->>API: saved
     API-->>GUI: scan id
 ```
@@ -327,30 +350,31 @@ sequenceDiagram
     API-->>GUI: saved to synced history
 ```
 
-### 6.4 View AI Explanation with tier cap (FR01 / PR01)
+### 6.4 View AI Explanation with student cap (FR01 / PR01)
 
 ```mermaid
 sequenceDiagram
-    actor U as Free/Premium User
+    actor U as Student / Team User
     participant GUI as BioAudit Client
     participant API as Backend API
     participant RED as utils/redact.js
     participant FS as Firestore (users)
     participant KB as knowledgeBase.js
-    participant GEM as Gemini API
+    participant GROQ as Groq API
 
-    U->>GUI: View AI Explanation
-    GUI->>API: POST /scans/:id/explain {findingId}
-    API->>FS: read user doc (tier, aiExplanationCount)
-    alt tier == free AND count >= monthly cap
-        API-->>GUI: 403 cap reached -> prompt upgrade
-    else within cap or Premium
+    U->>GUI: run with "Get AI explanations" on
+    GUI->>API: POST /scans/:scanId/findings/:findingIndex/explain
+    API->>FS: transaction: read user doc (organisationId, aiUsage)
+    alt student AND aiUsage.count >= monthly cap
+        API-->>GUI: 403 cap reached -> suggest joining a team
+    else within cap, or team account
+        API->>FS: spend one (student only)
         API->>RED: redactFinding(evidence)
         RED-->>API: redacted evidence
         API->>KB: load guidance for finding.category
-        API->>GEM: system prompt + redacted evidence + guidance
-        GEM-->>API: {explanation, mitigation, references}
-        API->>FS: increment aiExplanationCount (Free only)
+        API->>GROQ: one request: system prompt + redacted evidence + guidance (JSON mode)
+        GROQ-->>API: {explanation, mitigation, references}
+        API->>FS: save on the finding (refund the student if Groq failed)
         API-->>GUI: explanation + fix
     end
     GUI-->>U: display explanation alongside finding
@@ -366,20 +390,21 @@ sequenceDiagram
     participant FS as Firestore
     participant FBA as Firebase Auth
 
-    U->>GUI: click invite link (token)
-    GUI->>API: GET /invitations/:token
+    U->>GUI: paste invitation token (emailed, or passed on by the admin)
+    alt new user: Join with an invite
+        GUI->>API: POST /auth/register {email, password, invitationToken}
+    else existing user: Account -> Join an organisation
+        GUI->>API: POST /organisations/join {token}
+    end
     API->>FS: invitations.where(tokenHash==hash(token), status==pending)
-    alt expired or invalid
-        API-->>GUI: error -> request new invite
+    alt expired, cancelled or invalid
+        API-->>GUI: error -> ask the admin for a new invite
     else valid
-        API-->>GUI: invite details (org name, prefilled email)
-        U->>GUI: (register if new) / log in / acknowledge disclosure
-        GUI->>API: POST /invitations/:token/accept
         API->>FS: transaction: org.memberIds arrayUnion(uid), user.organisationId = orgId
         API->>FS: invitation.status = accepted
         API->>FBA: setCustomUserClaims(uid, {organisationId, role})
         API->>FBA: revokeRefreshTokens(uid)
-        API-->>GUI: confirmation, forces re-auth on next request
+        API-->>GUI: confirmation; the app signs in again to pick up the team
     end
 ```
 
@@ -393,8 +418,8 @@ sequenceDiagram
     participant FS as Firestore (flags/scans)
     participant AUD as audit.service.js
 
-    A->>GUI: Flag on member's scan record
-    GUI->>API: POST /organisations/:id/flags {scanId, reason}
+    A->>GUI: Members -> View their runs -> Flag one of these runs
+    GUI->>API: POST /organisations/:orgId/scans/:scanId/flag {reason}
     API->>FS: check no existing open flag for scanId
     API->>FS: flags.add({status: open, flaggedBy})
     API->>FS: scans.doc(scanId).update({flagged: true})
@@ -402,13 +427,13 @@ sequenceDiagram
     API-->>GUI: confirmation
 
     A->>GUI: Flagged Items
-    GUI->>API: GET /organisations/:id/flags?status=open
+    GUI->>API: GET /organisations/:orgId/flags?status=open
     API->>FS: flags.where(organisationId, status==open)
     FS-->>API: flag list
     API-->>GUI: display flags (note, date)
-    A->>GUI: mark reviewed
-    GUI->>API: PATCH /flags/:id {decision, note}
-    API->>FS: flag.status = reviewed
+    A->>GUI: Uphold or Dismiss
+    GUI->>API: POST /organisations/:orgId/flags/:flagId/review {decision: uphold|dismiss, note}
+    API->>FS: flag.status = reviewed (upheld) or dismissed
     API->>FS: scans.doc(scanId).update({flagged: false})
     API->>AUD: record(FLAG_REVIEWED)
     API-->>GUI: confirmation

@@ -41,14 +41,17 @@ bioaudit/
   models.py           Finding / Severity / TestRun — the shared vocabulary
   config.py           defaults + config.yaml loading
   session.py          the saved-session file (shared by GUI, CLI, dashboard)
-  adb.py              wrapper around the adb CLI
+  adb.py              wrapper around the adb CLI; resolve_adb() finds the binary
+  platform_tools.py   downloads Google's platform-tools on request (Download ADB)
 
   gui/
-    app.py            the window. 1600 lines, the file you will spend most time in.
+    app.py            the window. About 2,500 lines, the file you will spend most time in.
     theme.py          all colours and the stylesheet
-    signin.py         welcome gate + switch-account dialogs
-    team.py           the Team tab (admin tools)
+    signin.py         welcome gate + switch-account dialogs, sized to fit the screen
+    register_form.py  the Create account form (student and team)
+    team.py           the Team tab (admin tools, including Subscription)
     account_dialogs.py  profile / password / delete-account / join-org dialogs
+    formatting.py     dates and severity summaries shared by the tabs
 
   api/client.py       HTTP client for the backend. Standard library only.
 
@@ -84,7 +87,7 @@ The file is organised in labelled sections, in this order:
 
 | Section | What is in it |
 |---|---|
-| Account | menu, sign-in/out, the welcome gate, `_refresh_account_ui` |
+| Account | the sidebar's Account button and its menu (`MenuAbove`), sign-in/out, the welcome gate, `_refresh_account_ui` |
 | Server sync | `_upload`, `_retry_upload` |
 | Scan APK tab | `_build_scan_tab`, `_run_scan` |
 | Assess device tab | `_build_assess_tab`, `_run_assess` |
@@ -92,7 +95,8 @@ The file is organised in labelled sections, in this order:
 | Shared job machinery | `_start_job` and the signal handlers |
 
 Module-level helpers at the bottom render HTML: `_comparison_html`, `_sync_banner_html`,
-`_payload_to_html`, `_escape`.
+`_payload_to_html`, `_escape`. Near the top, `_hand_over_to_running_app` keeps BioAudit to
+one window: a second launch tells the running one to come forward and exits.
 
 ### `_refresh_account_ui` is the single place UI state is decided
 
@@ -121,7 +125,10 @@ def _run_something(self) -> None:
         run_ = core.build_scan_apk(apk, self.cfg, on_progress=report,
                                    should_cancel=(stop.is_set if stop else None))
         core.process_findings(run_, on_progress=report)
-        report("Saving to your account")
+        # Last chance to stop: once the upload starts the run is kept.
+        if stop is not None and stop.is_set():
+            raise core.ScanCancelled("Stopped at your request.")
+        report(SAVING_STEP)          # Cancel is disabled from here on
         self._upload(run_, authorised=True, apk_file_name=name, into=sync_result)
         return run_
 
@@ -150,11 +157,16 @@ argument. It knows nothing about Qt. Same for `core.py`, which takes an `on_prog
 callable — that is how the same code serves both the GUI's stage label and the CLI's
 silence.
 
-**Cancellation is cooperative.** `core.py` checks `should_cancel()` at step boundaries and
-raises `ScanCancelled`. It cannot interrupt a step that is mid-`adb` call, because there is
-no safe way to kill a blocking subprocess read from outside and leaving a device
-half-probed would be worse than waiting. `_on_job_cancelled` handles it as its own outcome
-— not an error, since the user asked for it.
+**Cancellation is cooperative.** `core.py` checks `should_cancel()` before every step and
+once more after the last one, and raises `ScanCancelled`; the job checks again before
+uploading. It cannot interrupt a step that is mid-`adb` call, because there is no safe way
+to kill a blocking subprocess read from outside and leaving a device half-probed would be
+worse than waiting. `_on_job_cancelled` handles it as its own outcome — not an error, since
+the user asked for it.
+
+**Closing the window waits for the job.** `closeEvent` asks the user, sets the cancel
+event, hides the window and waits for the thread. Destroying a `QThread` that is still
+running aborts the whole process, so never let the window go while a job runs.
 
 **Report rendering stays on the main thread.** `_on_job_finished` calls
 `core.write_report`, not `job`. weasyprint/GTK misbehaves when driven from a secondary
@@ -171,12 +183,13 @@ self.palette_colours["muted"]     # available on MainWindow
 theme.SEVERITY_COLOURS["high"]
 ```
 
-`theme.py` has two palettes (`LIGHT`, `DARK`) and builds the stylesheet from whichever
-matches the system theme, because Qt on Windows follows it. A hard-coded light colour
-looks fine on your machine and unreadable on a colleague's dark-mode one.
+The app always uses the dark palette (`DARK`), whatever the system theme; `LIGHT` is kept
+only as a fallback name. Every text colour pair in `theme.py` was checked against WCAG AA
+(4.5:1 for text), which is why status text uses `theme.ERROR_TEXT` and
+`theme.SUCCESS_TEXT` rather than a red or green picked by eye: the old dark red and green
+were barely readable on the dark background.
 
-Severity colours are deliberately identical in both themes: they carry meaning, and a
-reader should not have to relearn red.
+Severity colours carry meaning and are used as badge backgrounds with white text.
 
 Useful helpers:
 
@@ -252,8 +265,8 @@ pytest tests/ -q --ignore=tests/test_api_client.py     # offline, fast
 
 `test_api_client.py` is written for the **local Firebase emulator**, not the live server.
 Running it against production burns through the sign-in rate limit (20 attempts per 15
-minutes) and will lock you out for a while. Start the emulator first (BACKEND-GUIDE.md §7)
-or leave that file alone.
+minutes), and five wrong passwords lock an address for 15 minutes. Start the emulator first
+(BACKEND-GUIDE.md §7) or leave that file alone.
 
 ### Driving the real window headlessly
 
@@ -316,8 +329,9 @@ pyinstaller BioAudit.spec        # -> dist/BioAudit.exe (~104 MB)
 PDF export needs the native GTK/Pango/Cairo libraries on the **build** machine. The spec
 looks for them at `C:\msys64\mingw64\bin`, overridable with
 `WEASYPRINT_DLL_DIRECTORIES`. Without them the build still succeeds, but the exe falls
-back to HTML reports. `adb` is never bundled — it is an external CLI, so the user needs it
-on PATH.
+back to HTML reports. `adb` is never bundled: Google's prebuilt adb comes under the Android
+SDK terms, which restrict redistributing it. Instead the app's **Download ADB** button
+fetches it from Google for each user (`platform_tools.py`).
 
 ### If your new module works from source but not in the exe
 

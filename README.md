@@ -43,7 +43,7 @@ a **standalone Windows `.exe`** — all driving the same detection engine.
 | Behavioural error-oracle | `analysis/error_oracle.py` | M3 |
 | Lockout / attempt-counter oracle | `analysis/lockout.py` | M3 |
 | Statistical baseline + outlier detection (no ML) | `analysis/statistics.py` | — |
-| AI explanation + mitigation (grounded, redacted) — server-side only | `backend/src/services/aiGraph.service.js` | — |
+| AI explanation + mitigation (grounded, redacted) — server-side only | `backend/src/services/groq.service.js` | — |
 | Severity ranking + recommendation engine | `engine/` | — |
 | Desktop GUI (scan / assess / history / accounts) | `gui/` | — |
 | Backend: accounts, history, team oversight (required — see below) | `backend/`, `api/` | — |
@@ -59,7 +59,10 @@ confirmed.
 ## Requirements
 
 - Python 3.10+
-- `adb` on your PATH ([platform-tools](https://developer.android.com/tools/releases/platform-tools)) — only for the runtime `assess` command
+- `adb` — only for the runtime `assess` command. The desktop app's **Download ADB** button
+  fetches Google's platform-tools into BioAudit's own folder, and the CLI then uses that copy
+  too; or put [platform-tools](https://developer.android.com/tools/releases/platform-tools)
+  on your PATH yourself
 - A **real physical device** (a Google Pixel on Android 12+ is the reference) with USB debugging on — only for `assess`
 
 ```bash
@@ -178,14 +181,24 @@ Then sign in:
 - **Dashboard**: reads whichever account the CLI last signed in as; run `bioaudit login`
   first if it says nobody is signed in.
 
+There are two kinds of account and no paid personal plan. A **student** account is free,
+needs a verified university email, keeps the newest 10 runs and gets 20 AI explanations a
+month. A **team** account (a member or admin of an organisation) has everything, without
+those limits. An organisation pays one yearly subscription, through Stripe, that covers its
+admin and every member; see [backend/README.md](backend/README.md#organisation-subscription).
+Five wrong passwords lock an email address for 15 minutes, and **Forgot password** lifts
+the lock.
+
 Two things to know. **A failed upload does not throw the scan away**: the findings still
 render (the GUI keeps a "Retry saving" button for the run in memory; the CLI prints them to
 the terminal and exits non-zero, so rerun the command once you are back online) and the
 report is still written to disk — but until an upload succeeds the run exists nowhere else,
-since there is no local fallback. And **"keep me signed in" is off by default in the GUI**
-(the CLI's `login`/`register` persist by default, since that is the point of running them),
-because signing in returns a long-lived refresh token and writing that to disk is a
-trade-off worth making visible rather than quietly convenient.
+since there is no local fallback. And **"keep me signed in" starts off in the GUI** until
+someone on that computer opts in (the CLI's `login`/`register` persist by default, since
+that is the point of running them), because signing in returns a long-lived refresh token
+and writing that to disk is a trade-off worth making visible rather than quietly
+convenient. Once a login is saved the box starts ticked, and a launch that cannot reach the
+server keeps the saved login for next time.
 
 See [backend/README.md](backend/README.md) for the API reference, the data model, and how
 to run its two test suites against the Firebase emulators.
@@ -212,6 +225,7 @@ bioaudit/
   config.py         config loading
   models.py         Finding / Severity / TestRun data models
   adb.py            ADB wrapper (no root)
+  platform_tools.py downloads Google's platform-tools on request, so adb needs no setup
   api/              client for the backend (standard library only)
   session.py        saved-session file, shared by the CLI, GUI, and dashboard
   static_analysis/  APK + manifest inspection (androguard)
@@ -219,7 +233,8 @@ bioaudit/
   analysis/         error-oracle, lockout, statistics (robust-z outliers)
   engine/           severity model + recommendation orchestration
   report/           HTML/PDF export
-  gui/              PySide6 desktop app (app.py, signin.py — sign-in and welcome gate)
+  gui/              PySide6 desktop app (app.py; signin.py and register_form.py — sign-in
+                    and welcome gate; team.py — Team tab; account_dialogs.py)
   dashboard/        Streamlit UI
 launcher.py         frozen-exe entry point (GUI by default, CLI with args)
 BioAudit.spec   PyInstaller build spec

@@ -3,24 +3,25 @@ androguard>=4.1.0        # APK decompilation + manifest parsing
 numpy>=1.26              # statistics (robust-z outlier detection)
 pyyaml>=6.0              # config
 
-# AI explanation is not a client-side dependency: it runs entirely on the backend
-# (backend/ has its own Node-side Gemini SDK, including LangGraph orchestration).
-# Nothing to install here for it.
+# AI explanation is not a client-side dependency: it runs entirely on the backend,
+# which calls Groq. Nothing to install here for it.
 
-# Desktop GUI (optional; core + CLI run without it)
+# Desktop GUI (optional; core + CLI run without it). Also provides QtNetwork, which
+# keeps a second launch from opening another window.
 PySide6>=6.6             # native desktop app: python -m bioaudit gui
 
 # Dashboard + reporting
 streamlit>=1.40          # dashboard UI
-jinja2>=3.1              # HTML report templating
-weasyprint>=63           # HTML -> PDF export
+weasyprint>=63           # HTML -> PDF export (HTML reports are written without it)
 
 # Testing
 pytest>=8.0               # pytest tests/
 
-# Build-only: package a standalone Windows exe (see docs/BUILD-EXE.md)
+# Build-only: package a standalone Windows exe (see docs/FRONTEND-GUIDE.md, section 8)
 # pyinstaller>=6.3
 
-# Device control is via the `adb` CLI on PATH (no Python dependency required).
+# Device control is via the `adb` CLI, with no Python dependency: an adb already on the
+# machine, or Google's platform-tools, which the desktop app downloads on request
+# (bioaudit/platform_tools.py).
 # uiautomator2 is optional and only needed for UI-driven scenario navigation:
 # uiautomator2>=3.2

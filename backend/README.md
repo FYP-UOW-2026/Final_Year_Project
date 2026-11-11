@@ -17,7 +17,7 @@ everything around it:
 | Generating AI explanations | Converting an exported report to PDF |
 | Organisations, invitations, member oversight | |
 
-Two consequences worth noting. The AI provider keys (Gemini by default, Groq as fallback) live on the server, so it is never shipped
+Two consequences worth noting. The AI provider key (Groq) lives on the server, so it is never shipped
 inside a downloadable program and can be replaced centrally. And detection stays deterministic:
 the rules in the desktop app decide what a problem is, and the AI here only puts a confirmed
 finding into readable words.
@@ -26,8 +26,10 @@ finding into readable words.
 
 - Node.js 18.17 or newer
 - A Firebase project with **Firestore** and **Email/Password authentication** enabled
-- A Gemini API key (default provider) and/or a Groq API key (fallback, free from
-  console.groq.com), only if you want AI explanations
+- A Groq API key (free from console.groq.com), only if you want AI explanations
+- Mailgun or SMTP settings, for emailing sign-up and password reset codes
+- A Stripe account with the "Run Payments with Stripe" extension, only for the
+  organisation subscription
 
 ## Setup
 
@@ -45,7 +47,7 @@ Filling in `.env` needs three things from the Firebase console:
    the key grants full access to your project.
 2. **Web API key.** Project settings, General, Web API Key. The Admin SDK cannot check a
    password, so sign-in calls Google's Identity Toolkit with this key.
-3. **Gemini and/or Groq API key**, if you want explanations. Leave it blank and the rest of the API works
+3. **Groq API key**, if you want explanations. Leave it blank and the rest of the API works
    normally, with the explain endpoint reporting that the feature is switched off.
 
 Then deploy the database rules:
@@ -59,8 +61,9 @@ firebase deploy --only firestore:rules
 Two suites, neither of which touches a live Firebase project.
 
 ```bash
-npm test                 # 13 offline checks, no emulator needed
-npm run test:integration # 42 checks against the Firebase emulators
+npm test                 # 30 offline checks, no emulator needed
+npm run test:integration # 101 checks against the Firebase emulators
+node tests/aiGraph.groq.test.mjs   # Groq message format and rate-limit retry, offline
 ```
 
 **`npm test`** boots the real Express app and exercises the health check, the 404 handler,
@@ -418,9 +421,15 @@ backend/
     routes/                one file per group, mapped to the diagram
     services/
       firebaseAuth.service.js   password sign-in and token refresh
+      loginGuard.service.js     locks an email after repeated wrong passwords
+      passwordReset.service.js  Forgot password codes
+      studentVerification.service.js  university email codes
       users.service.js          accounts and custom claims
       organisations.service.js  membership, invitations, flag and review
+      billing.service.js        the organisation subscription (Stripe)
       scans.service.js          history, retention, comparison
+      email.service.js          Mailgun or SMTP, best-effort
+      knowledgeBase.js          reviewed guidance per finding category, for the AI
       groq.service.js           AI explanations, with redaction (the live path)
       aiGraph.service.js        LangGraph multi-provider version, not currently called (see below)
       report.service.js         HTML report rendering
@@ -443,9 +452,9 @@ Ollama models, then OpenAI once enabled), trying the next provider when one fail
 
 What it adds over a single-shot call: tool calls instead of one fixed prompt (the model
 asks for a finding's evidence, a scan's summary, guidance for a category, or a diff between
-two scans, rather than having everything handed to it up front), an output `responseSchema`
-per mode instead of prose-described JSON, and a one-shot repair loop for a malformed reply
-instead of a hard failure.
+two scans, rather than having everything handed to it up front), a JSON reply shape stated
+in each mode's prompt and checked with zod, and a repair turn for a malformed reply instead
+of a hard failure.
 
 ```js
 import { createSession } from "./services/aiGraph.service.js";

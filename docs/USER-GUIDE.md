@@ -30,8 +30,10 @@ find it.
 
 `adb` is Google's own tool for talking to an Android phone over USB. The easy way: open
 **Assess a device** and press **Download ADB**. BioAudit fetches Google's platform-tools
-(about 7 MB) into its own folder and uses them from then on, with nothing to install or
-add to PATH. The button only appears when the computer has no `adb` already.
+(about 8 MB) into `C:\Users\<you>\BioAudit\platform-tools` and uses them from then on, with
+nothing to install or add to PATH. The button only appears when the computer has no `adb`
+already. The first time, the phone asks "Allow USB debugging?": unlock it and tap **Allow**,
+then press **Refresh**.
 
 To set it up yourself instead, download
 [Android platform-tools](https://developer.android.com/tools/releases/platform-tools),
@@ -48,7 +50,8 @@ accept the "Allow USB debugging?" prompt.
 
 ## 2. Starting the app
 
-Double-click **BioAudit.exe**.
+Double-click **BioAudit.exe**. If it is already open, opening it again brings the open
+window to the front instead of starting a second copy.
 
 The first thing you see is a welcome screen with three tabs:
 
@@ -58,19 +61,27 @@ The first thing you see is a welcome screen with three tabs:
 | **Join with an invite** | An admin sent you an invitation token for their team. Any email address works here. |
 | **Sign in** | You already have an account. Forgotten your password? Click **Forgot password?** under the password box, press **Send code**, and enter the six-digit code we email you along with a new password. Resetting signs you out on every other device. |
 
-Tick **"Keep me signed in on this computer"** to skip this next time. It is off by
-default on purpose: staying signed in writes a long-lived token to a file in your home
-folder, which is worth knowing about rather than having happen quietly. Leave it off on a
-shared or public computer.
+Tick **"Keep me signed in on this computer"** to skip this next time. It starts off the
+first time on purpose: staying signed in writes a long-lived token to a file in your home
+folder, which is worth knowing about rather than having happen quietly. Once someone has
+saved a login on this computer, it starts ticked. Leave it off on a shared or public
+computer.
 
 Closing this screen without signing in closes the app, because there is nothing it can
 do signed out.
 
 ### Setting up a team
 
-Fill in the **Organisation** field when creating your account. That makes you the team's
-admin and unlocks the Team tab, where you can invite colleagues. Leave it blank if you
-are just testing your own apps — you can always join a team later from the Account menu.
+On **Create account**, choose **I'm setting up a team** and give your organisation a name.
+That makes you the team's admin and unlocks the Team tab, where you can invite colleagues.
+
+A team pays one yearly subscription that covers you and everyone you invite. Straight
+after you create the team, the app offers to open the payment page; until it is paid, the
+team stays locked (you cannot invite anyone yet). You can also pay later from **Team →
+Subscription**. See [section 7](#7-teams) for renewing and cancelling.
+
+Testing only your own apps as a student? Create a student account instead. You can join a
+team later with **Account → Join an organisation…**
 
 ---
 
@@ -86,7 +97,9 @@ code without running it.
 While it runs you will see the current step ("Reading the app's settings", "Scanning the
 app's code") and a **Cancel** button. Cancel stops the run after the step it is on
 finishes — a step already reading the file cannot be interrupted part way, so give it a
-moment.
+moment — and nothing is saved. Once the run reaches "Saving to your account", Cancel is
+greyed out, because that step cannot be undone. Closing the window during a run asks
+first, then stops it the same way.
 
 When it finishes you get a list of findings, colour-coded badges showing how many of each
 severity, and a PDF report written to `C:\Users\<you>\BioAudit\reports`.
@@ -109,7 +122,8 @@ This is the fuller test. It probes the running app on a real device, so it finds
 that reading the code cannot show.
 
 1. Connect the phone by USB, with USB debugging on and the computer authorised.
-2. Go to the **Assess a device** tab.
+2. Go to the **Assess a device** tab. On a computer without `adb`, press **Download ADB**
+   first (see [Getting adb](#getting-adb-only-for-phone-testing)).
 3. Click **Refresh** — your phone's serial should appear.
 4. Click **Load apps** and pick the app, or type its package name
    (e.g. `com.example.myapp`).
@@ -155,10 +169,12 @@ compiled code cannot be read with total certainty. Findings from probing the liv
 
 ### Getting a plain-language explanation
 
-Click **Explain findings** after a run. The server writes an explanation and a specific
-fix for each finding, aimed at a developer with no security background, naming the actual
-Android setting or API to change. Explanations already written are reused, so clicking it
-twice costs nothing.
+Turn on **Get AI explanations**, beside the Run button, before you start. Once the run is
+saved, the server writes an explanation and a specific fix for each finding, aimed at a
+developer with no security background, naming the actual Android setting or API to
+change, and the report shows them. Explanations already written are reused, so running it
+again on the same scan costs nothing. A student account gets 20 a month; team accounts are
+unlimited.
 
 ### Reports
 
@@ -186,9 +202,10 @@ from other computers, since the account is the only place they live.
 - Pick a run from the dropdown to see its full findings again
 - **Reload** re-fetches from the server
 - **Delete this run** / **Clear all history** remove them permanently from your account
-- **Compare two runs…** (team accounts) shows what got fixed, what is new, and what is
-  unchanged between two runs of the same app. Findings are matched by category and
-  component, so a genuine fix shows as resolved even though each run generates fresh IDs.
+- **Compare two runs…** (team accounts, once you have two saved runs) shows what got fixed,
+  what is new, and what is unchanged between two runs of the same app. Findings are matched
+  by category and component, so a genuine fix shows as resolved even though each run
+  generates fresh IDs.
 
 There are two kinds of account, and no paid plan:
 
@@ -197,7 +214,7 @@ There are two kinds of account, and no paid plan:
 | Who | A personal account at a verified university email | Anyone who joined a team, or created one |
 | History kept | Your 10 most recent runs | Everything |
 | Compare runs, save report from account | No | Yes |
-| AI explanations | A monthly allowance | Unlimited |
+| AI explanations | 20 a month | Unlimited |
 
 A student account drops its oldest run as you add more; the app tells you when that
 happens. If you are removed from a team, your account becomes a student account again.
@@ -213,17 +230,31 @@ to overseeing only.
 
 ## 7. Teams
 
-If you created your account with an organisation name, or joined one from an invite, the
-**Team** tab is live. Otherwise it explains itself and stays empty.
+The **Team** tab appears for a team's admins. Members do not see it.
 
 As an admin you can:
 
 | Sub-tab | What you can do |
 |---|---|
-| **Members** | See everyone, promote someone to admin, remove them, or delete their account |
+| **Members** | See everyone, view their runs, promote someone to admin, suspend or reinstate them, remove them, or delete their account |
 | **Invitations** | Invite by email (creates a one-time token to send them), cancel pending invites |
 | **Flagged runs** | Review scans you flagged as needing a look, then uphold or dismiss |
-| **Activity log** | Every admin action, with who did it and when |
+| **Activity log** | Every admin action, with who did it, who it affected, and when |
+| **Subscription** | The organisation's yearly subscription: pay, cancel, keep, renew, or manage billing online |
+
+### The organisation's subscription
+
+One yearly subscription covers the admin and every member, so the whole team shares one
+paid year and one renewal date. It renews and is charged automatically each year until an
+admin cancels it.
+
+- **Cancel subscription…** stops the renewal. Everyone keeps access until the end of the
+  year already paid, and **Keep subscription** undoes it before then.
+- **Manage billing online** opens Stripe's billing page, to cancel or change the card there.
+- When the paid year ends after a cancellation, the organisation is suspended until it is
+  paid again. Members are told to ask their admin and signed out; the admin can still sign
+  in, but only the Subscription tab is open, to **Renew subscription…**
+- Only admins can do any of this. Student accounts are not part of it.
 
 ### What an admin can and cannot see
 
@@ -239,14 +270,16 @@ currently on the team: once someone is removed, their runs are theirs alone agai
 
 ## 8. Your account
 
-Everything is under the **Account** menu.
+Everything is behind the **Account** button at the bottom of the sidebar, above your name.
 
+- **Switch account…** — sign in as someone else (saved logins switch without a password)
+- **Sign out**
 - **Account details…** — who you are, your account type, your team
 - **Account settings…** — change your display name, email address, or password, or delete
   your account
+- **Verify student email…** — only shown while a student account still needs it
 - **Join an organisation…** — redeem an invite token (only shown if you are not already
   in a team)
-- **Sign out**
 
 **Changing your password or email signs you out everywhere**, on purpose — if someone
 else had your session, that ends it. Same for joining a team: your permissions change, so
@@ -305,9 +338,23 @@ closing the run. On the command line, just run the same command again.
 **"Too many attempts. Try again in a few minutes."** — the server limits sign-in attempts
 to 20 per 15 minutes per computer, to stop password guessing. Wait it out.
 
+**"Too many failed attempts. Try again in N minutes."** — five wrong passwords for one
+email address lock it for 15 minutes (longer if it happens again, up to an hour). Even the
+right password is refused until then. **Forgot password?** lifts the lock straight away.
+
+**"ADB is not set up on this computer"** — press **Download ADB** beside the device list.
+
+**"Phone found, not allowed yet"** — the phone has not approved this computer. Unlock it,
+tap **Allow** on the "Allow USB debugging?" prompt, then press **Refresh**. No prompt? Unplug
+and replug the phone, or in Developer options use **Revoke USB debugging authorisations**,
+then plug in again.
+
+**"Phone found but offline"** — unplug the phone, plug it back in, and press **Refresh**.
+
 **No device in the Assess tab** — check `adb devices` in a terminal. If it is empty:
 confirm USB debugging is on, try a different cable or port, and unlock the phone to accept
-the authorisation prompt. If it says "unauthorized", that prompt is what is missing.
+the authorisation prompt. If it says "unauthorized", that prompt is what is missing. Some
+phone brands also need their maker's USB driver on Windows.
 
 **"Package ... is not installed"** — the package name is wrong. Use **Load apps** to pick
 from the real list instead of typing it.
@@ -318,6 +365,15 @@ genuinely takes a while. **Cancel** stops it at the next step boundary.
 **Explanations do nothing** — the AI layer needs a key configured on the server, not on
 your computer. Check `/api/health` on the server; it reports `aiExplanations` as enabled
 or disabled. Findings, severities, and fallback fixes all work regardless.
+
+**"The AI service has hit its request limit"** — the AI provider's free limit was reached.
+Try again in a minute; findings that already have an explanation are skipped.
+
+**"Your organisation's subscription has ended" or "has not been paid yet"** — ask your
+team's admin to pay or renew it from **Team → Subscription**.
+
+**Nothing happens when I open BioAudit** — it is probably already open. Look for the window
+or its taskbar icon.
 
 **The app crashed** — there is a log at `bioaudit-crash.log` in your home folder.
 
