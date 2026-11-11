@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -49,6 +50,16 @@ def resolve_adb(adb_path: str = "adb") -> str:
 def adb_available(adb_path: str = "adb") -> bool:
     """Whether any adb can be found, so a caller can offer to download one if not."""
     return resolve_adb(adb_path) != "adb" or shutil.which("adb") is not None
+
+
+def _parse_devices(output: str) -> dict[str, str]:
+    """`adb devices` output -> {serial: state}, skipping its header and server messages."""
+    states = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and not line.startswith(("*", "List of devices")):
+            states[parts[0]] = parts[1]
+    return states
 
 
 @dataclass
@@ -102,14 +113,25 @@ class Adb:
 
     # --- device discovery -------------------------------------------------
 
-    def devices(self) -> list[str]:
+    def device_states(self) -> dict[str, str]:
+        """Every phone adb can see, by serial, with its state.
+
+        "device" means ready. "unauthorized" means the phone has not yet allowed this
+        computer: its "Allow USB debugging?" prompt is waiting, which is what a new adb
+        (such as a fresh download) always meets first. "offline" means the connection
+        dropped. The first call after adb's server starts can come back empty, because the
+        server has not finished looking for phones, so that case is asked once more.
+        """
         res = self.run("devices")
-        serials = []
-        for line in res.stdout.splitlines()[1:]:
-            line = line.strip()
-            if line and line.endswith("device"):
-                serials.append(line.split()[0])
-        return serials
+        states = _parse_devices(res.stdout)
+        if not states and "daemon started" in res.stdout + res.stderr:
+            time.sleep(2)
+            states = _parse_devices(self.run("devices").stdout)
+        return states
+
+    def devices(self) -> list[str]:
+        """Serials of the phones that are ready to use."""
+        return [serial for serial, state in self.device_states().items() if state == "device"]
 
     def require_device(self) -> str:
         """Return the target serial, erroring if the selection is ambiguous."""

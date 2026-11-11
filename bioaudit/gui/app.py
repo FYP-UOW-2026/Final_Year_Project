@@ -1570,17 +1570,29 @@ def run(cfg: Config | None = None) -> int:
                 self.device_combo.setEnabled(False)
                 return
             try:
-                serials = Adb(self.cfg.device["adb_path"], self.cfg.device["serial"]).devices()
+                states = Adb(self.cfg.device["adb_path"], self.cfg.device["serial"]).device_states()
             except Exception as exc:  # noqa: BLE001
                 self.statusBar().showMessage(f"adb error: {exc}")
-                serials = []
+                states = {}
+            serials = [serial for serial, state in states.items() if state == "device"]
             if serials:
                 self.device_combo.addItems(serials)
+                self.device_combo.setEnabled(True)
+                return
+            # A phone adb can see but cannot use says why, rather than looking absent.
+            if "unauthorized" in states.values():
+                self.device_combo.addItem(
+                    "(phone found, not allowed yet: unlock it, tap Allow on its USB debugging "
+                    "prompt, then press Refresh)")
+            elif states:
+                self.device_combo.addItem(
+                    "(phone found but offline: unplug it, plug it back in, then press Refresh)")
             else:
                 self.device_combo.addItem("(no device — check USB debugging)")
-                self.device_combo.setEnabled(False)
-            if serials:
-                self.device_combo.setEnabled(True)
+                self.statusBar().showMessage(
+                    "No phone found. Check USB debugging is on, the cable carries data (not "
+                    "only charging), and Windows has the phone's USB driver.")
+            self.device_combo.setEnabled(False)
 
         def _download_adb(self) -> None:
             """Fetch Google's platform-tools, so assessing a phone needs nothing installed."""

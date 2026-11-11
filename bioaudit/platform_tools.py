@@ -35,7 +35,17 @@ _MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 
 
 def install_dir() -> Path:
-    """Where the downloaded platform-tools live, per user."""
+    """Where the downloaded platform-tools live: the BioAudit folder in the user's home.
+
+    The same folder as the saved session and reports. Not AppData: the Microsoft Store
+    build of Python quietly redirects writes there into its own package folder, which put
+    adb somewhere nobody would think to look.
+    """
+    return Path.home() / "BioAudit" / "platform-tools"
+
+
+def _earlier_install_dir() -> Path:
+    """Where downloads went before, so a copy fetched then is still found."""
     if sys.platform == "win32":
         base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
     elif sys.platform == "darwin":
@@ -47,8 +57,11 @@ def install_dir() -> Path:
 
 def installed_adb() -> Optional[str]:
     """The downloaded adb, if there is one."""
-    path = install_dir() / _ADB_NAME
-    return str(path) if path.is_file() else None
+    for folder in (install_dir(), _earlier_install_dir()):
+        path = folder / _ADB_NAME
+        if path.is_file():
+            return str(path)
+    return None
 
 
 def download(on_progress: Optional[Callable[[str], None]] = None,
