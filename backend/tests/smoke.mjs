@@ -37,7 +37,13 @@ const { createApp } = await import("../src/app.js");
 const { redact } = await import("../src/utils/redact.js");
 const { renderScanReportHtml } = await import("../src/services/report.service.js");
 const { compareScans } = await import("../src/services/scans.service.js");
-const { mailgunMessage, passwordResetEmail, studentVerificationEmail } = await import(
+const {
+  accountExistsEmail,
+  mailgunMessage,
+  passwordResetEmail,
+  studentVerificationEmail,
+  teamSignupEmail,
+} = await import(
   "../src/services/email.service.js"
 );
 const { UNIVERSITIES } = await import("../src/data/universities.js");
@@ -117,7 +123,7 @@ await check("registering with a short password is rejected with a clear message"
   });
   assert.equal(res.status, 400);
   const body = await res.json();
-  assert.match(JSON.stringify(body.error.details), /at least 8 characters/);
+  assert.match(JSON.stringify(body.error.details), /at least 12 characters/);
 });
 
 await check("one network can ask for at most ten code emails an hour, across routes", async () => {
@@ -252,6 +258,20 @@ await check("the password reset email carries the code, unbroken, and says how t
   assert.ok(mail.html.includes(">730154<"), "the HTML code must be one unbroken string");
   assert.match(mail.text, /did not ask to reset your password/);
   assert.match(mail.html, /Reset your password/);
+});
+
+await check("the team sign-up email carries the code without calling anyone a student", () => {
+  const mail = teamSignupEmail({ code: "553201", expiresInMinutes: 15 });
+  assert.match(mail.subject, /^553201 /);
+  assert.ok(mail.html.includes(">553201<"), "the HTML code must be one unbroken string");
+  assert.doesNotMatch(mail.text + mail.html, /student/i);
+});
+
+await check("the 'you already have an account' notice points to sign-in and has no code", () => {
+  const mail = accountExistsEmail();
+  assert.match(mail.subject, /already have a BioAudit account/);
+  assert.match(mail.text, /Forgot\s+password\?/);
+  assert.doesNotMatch(mail.subject + mail.text, /\d{6}/, "a code here would defeat the point");
 });
 
 await check("markup in a university name is escaped in the HTML", () => {

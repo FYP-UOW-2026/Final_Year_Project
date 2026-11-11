@@ -158,6 +158,16 @@ async function registerStudent(body) {
   return call("POST", "/auth/register", { body: { ...body, code: KNOWN_CODE } });
 }
 
+/** Set up a team the way an admin does: ask for a code, then sign up with it. */
+async function registerTeam({ body }) {
+  const sent = await call("POST", "/auth/register/send-code", {
+    body: { email: body.email, accountType: "team" },
+  });
+  assert.equal(sent.status, 200, JSON.stringify(sent.body));
+  await plantSignupCode(body.email);
+  return call("POST", "/auth/register-admin", { body: { ...body, code: KNOWN_CODE } });
+}
+
 async function accountExists(email) {
   return auth.getUserByEmail(email).then(
     () => true,
@@ -191,7 +201,7 @@ await check("a sign-up code is only sent to a university address", async () => {
   assert.match(sent.body.error.message, /personal accounts are for students/i);
 
   const registered = await call("POST", "/auth/register", {
-    body: { email, password: "hobbyist-password-1", code: KNOWN_CODE },
+    body: { email, password: "hobbyist-Password-1!", code: KNOWN_CODE },
   });
   assert.equal(registered.status, 400);
   assert.equal(await accountExists(email), false);
@@ -233,7 +243,7 @@ await check("a code pasted with spaces in it still signs the student up", async 
   await plantSignupCode(email);
   const spaced = KNOWN_CODE.split("").join(" ");
   const { status, body } = await call("POST", "/auth/register", {
-    body: { email, password: "pasted-password-1", code: ` ${spaced} ` },
+    body: { email, password: "pasted-Password-1!", code: ` ${spaced} ` },
   });
   assert.equal(status, 201, JSON.stringify(body));
 });
@@ -242,7 +252,7 @@ await check("the chosen university is kept on the new account", async () => {
   const email = `dev-${unique()}@ox.ac.uk`;
   const { status, body } = await registerStudent({
     email,
-    password: "oxford-password-1",
+    password: "oxford-Password-1!",
     universityId: "oxford",
   });
   assert.equal(status, 201, JSON.stringify(body));
@@ -264,15 +274,44 @@ await check("the accepted Terms version is stored on the profile", async () => {
   assert.match(body.user.tosVersion, /^\d{4}-\d{2}$/);
 });
 
-await check("the same email cannot register twice", async () => {
-  const sent = await call("POST", "/auth/register/send-code", { body: { email: userEmail } });
-  assert.equal(sent.status, 409, "no code should be sent for an address with an account");
+await check("signing up with an address that has an account gives nothing away", async () => {
+  // Without this, anyone could find out who has an account just by trying to sign up.
+  const fresh = `fresh-${unique()}@example.ac.uk`;
+  const taken = await call("POST", "/auth/register/send-code", { body: { email: userEmail } });
+  const free = await call("POST", "/auth/register/send-code", { body: { email: fresh } });
+  assert.equal(taken.status, 200, JSON.stringify(taken.body));
+  assert.equal(free.status, 200, JSON.stringify(free.body));
+  assert.equal(taken.body.message.replace(userEmail, "X"), free.body.message.replace(fresh, "X"));
+  assert.deepEqual(Object.keys(taken.body).sort(), Object.keys(free.body).sort());
+  assert.equal(taken.body.delivered, free.body.delivered);
 
+  // And a guessed code is refused in the same words for both.
+  const guess = (email) =>
+    call("POST", "/auth/register", { body: { email, password: userPassword, code: "000000" } });
+  const [takenGuess, freeGuess] = [await guess(userEmail), await guess(fresh)];
+  assert.equal(takenGuess.status, freeGuess.status);
+  assert.equal(takenGuess.body.error.message, freeGuess.body.error.message);
+});
+
+await check("only the owner, holding the code, is told the address already has an account", async () => {
+  // The owner was emailed a notice, not a code. Planting the code stands in for someone
+  // who could read that inbox anyway.
+  await plantSignupCode(userEmail);
   const { status, body } = await call("POST", "/auth/register", {
     body: { email: userEmail, password: userPassword, code: KNOWN_CODE },
   });
-  assert.equal(status, 409);
-  assert.match(body.error.message, /already exists/i);
+  assert.equal(status, 409, JSON.stringify(body));
+  assert.match(body.error.message, /already have an account/i);
+});
+
+await check("setting up a team needs the code emailed to that address", async () => {
+  const email = `teamless-${unique()}@example.com`;
+  const { status, body } = await call("POST", "/auth/register-admin", {
+    body: { email, password: "teamless-Password-1!", organisationName: "No Code Ltd" },
+  });
+  assert.equal(status, 400);
+  assert.match(body.error.message, /Confirm your email first/);
+  assert.equal(await accountExists(email), false, "no account should have been made");
 });
 
 await check("a code sent to one address cannot register another", async () => {
@@ -282,7 +321,7 @@ await check("a code sent to one address cannot register another", async () => {
   await plantSignupCode(codeHolder);
 
   const { status } = await call("POST", "/auth/register", {
-    body: { email: other, password: "other-password-1", code: KNOWN_CODE },
+    body: { email: other, password: "other-Password-1!", code: KNOWN_CODE },
   });
   assert.equal(status, 400);
   assert.equal(await accountExists(other), false);
@@ -290,7 +329,7 @@ await check("a code sent to one address cannot register another", async () => {
 
 await check("a sign-up code stops working after too many wrong guesses", async () => {
   const email = `guesser-${unique()}@uni.ac.uk`;
-  const password = "guesser-password-1";
+  const password = "guesser-Password-1!";
   await call("POST", "/auth/register/send-code", { body: { email } });
   await plantSignupCode(email);
 
@@ -472,7 +511,7 @@ await check("an unknown email gives the same answer as a wrong password", async 
 
 group("Password guessing");
 
-const guessPassword = "guessing-password-1";
+const guessPassword = "guessing-Password-1!";
 const lockRecord = (email) =>
   db.collection(COLLECTIONS.LOGIN_ATTEMPTS).doc(crypto.createHash("sha256").update(email).digest("hex"));
 const signInAs = (email, password) => call("POST", "/auth/login", { body: { email, password } });
@@ -480,7 +519,7 @@ let guessedEmail;
 
 await check("five wrong passwords lock the address, whatever the next attempt is", async () => {
   guessedEmail = `guessed-${unique()}@example.com`;
-  const reg = await call("POST", "/auth/register-admin", {
+  const reg = await registerTeam({
     body: { email: guessedEmail, password: guessPassword, organisationName: "Guess Ltd", tosAccepted: true },
   });
   assert.equal(reg.status, 201, JSON.stringify(reg.body));
@@ -527,7 +566,7 @@ await check("wrong passwords below the limit are forgotten after a correct one",
 
 await check("guessing a signed-in account's current password locks it too", async () => {
   const email = `session-${unique()}@example.com`;
-  const reg = await call("POST", "/auth/register-admin", {
+  const reg = await registerTeam({
     body: { email, password: guessPassword, organisationName: "Stolen Ltd", tosAccepted: true },
   });
   const token = reg.body.session.idToken;
@@ -535,7 +574,7 @@ await check("guessing a signed-in account's current password locks it too", asyn
   for (let i = 0; i < 5; i += 1) {
     const { status } = await call("POST", "/users/me/password", {
       token,
-      body: { currentPassword: "not-the-password", newPassword: "a-brand-new-password" },
+      body: { currentPassword: "not-the-password", newPassword: "A-brand-new-Password-1!" },
     });
     statuses.push(status);
   }
@@ -544,7 +583,7 @@ await check("guessing a signed-in account's current password locks it too", asyn
 
 await check("resetting a forgotten password lifts a lock", async () => {
   const email = `locked-out-${unique()}@example.com`;
-  const reg = await call("POST", "/auth/register-admin", {
+  const reg = await registerTeam({
     body: { email, password: guessPassword, organisationName: "Locked Ltd", tosAccepted: true },
   });
   for (let i = 0; i < 5; i += 1) await signInAs(email, "not-the-password");
@@ -553,10 +592,10 @@ await check("resetting a forgotten password lifts a lock", async () => {
   await call("POST", "/auth/password-reset/send-code", { body: { email } });
   await plantResetCode(email, reg.body.user.id);
   const reset = await call("POST", "/auth/password-reset", {
-    body: { email, code: KNOWN_CODE, newPassword: "a-fresh-password-1" },
+    body: { email, code: KNOWN_CODE, newPassword: "a-fresh-Password-1!" },
   });
   assert.equal(reset.status, 200, JSON.stringify(reset.body));
-  assert.equal((await signInAs(email, "a-fresh-password-1")).status, 200);
+  assert.equal((await signInAs(email, "a-fresh-Password-1!")).status, 200);
 });
 
 group("Own account");
@@ -580,7 +619,7 @@ await check("the display name can be updated", async () => {
 await check("changing the password needs the current one", async () => {
   const { status } = await call("POST", "/users/me/password", {
     token: userToken,
-    body: { currentPassword: "wrong", newPassword: "a-brand-new-password" },
+    body: { currentPassword: "wrong", newPassword: "A-brand-new-Password-1!" },
   });
   assert.equal(status, 401, "a wrong current password should be refused");
 });
@@ -598,7 +637,7 @@ async function plantKnownCode(uid) {
 
 /** A verified student who has just moved to `newEmail`, with the session to act as them. */
 async function lapsedStudent(newEmail) {
-  const password = "lapsed-password-1";
+  const password = "lapsed-Password-1!";
   const reg = await registerStudent({ email: `lapsed-${unique()}@example.ac.uk`, password });
   assert.equal(reg.status, 201, JSON.stringify(reg.body));
   const token = reg.body.session.idToken;
@@ -851,7 +890,7 @@ let adminToken;
 let orgId;
 
 await check("registering an admin also creates their organisation", async () => {
-  const { status, body } = await call("POST", "/auth/register-admin", {
+  const { status, body } = await registerTeam({
     body: {
       email: adminEmail,
       password: adminPassword,
@@ -902,7 +941,7 @@ let memberUid;
 await check("an invitation token that does not exist creates no account", async () => {
   const email = `stranger-${unique()}@example.com`;
   const { status } = await call("POST", "/auth/register", {
-    body: { email, password: "stranger-password-1", invitationToken: "f".repeat(64) },
+    body: { email, password: "stranger-Password-1!", invitationToken: "f".repeat(64) },
   });
   assert.equal(status, 404);
   assert.equal(await accountExists(email), false);
@@ -913,7 +952,7 @@ await check("an invited person registers and joins with the token in one step", 
   const registered = await call("POST", "/auth/register", {
     body: {
       email: "invitee@example.com",
-      password: "member-password-1",
+      password: "member-Password-1!",
       displayName: "Member",
       invitationToken: inviteToken,
     },
@@ -936,7 +975,7 @@ await check("an invited person registers and joins with the token in one step", 
 await check("the same invitation token cannot be used twice", async () => {
   const email = `other-${unique()}@example.com`;
   const { status } = await call("POST", "/auth/register", {
-    body: { email, password: "other-password-1", invitationToken: inviteToken },
+    body: { email, password: "other-Password-1!", invitationToken: inviteToken },
   });
   assert.equal(status, 409, "a redeemed invitation should be refused");
   assert.equal(await accountExists(email), false, "no account should be left behind");
@@ -944,8 +983,8 @@ await check("the same invitation token cannot be used twice", async () => {
 
 await check("a solo organisation's owner can scan until a second person joins", async () => {
   const soloEmail = `solo-${unique()}@example.com`;
-  const reg = await call("POST", "/auth/register-admin", {
-    body: { email: soloEmail, password: "solo-password-1", organisationName: "One Person Ltd", solo: true },
+  const reg = await registerTeam({
+    body: { email: soloEmail, password: "solo-Password-1!", organisationName: "One Person Ltd", solo: true },
   });
   assert.equal(reg.status, 201, JSON.stringify(reg.body));
   const soloToken = reg.body.session.idToken;
@@ -963,7 +1002,7 @@ await check("a solo organisation's owner can scan until a second person joins", 
   const partner = await call("POST", "/auth/register", {
     body: {
       email: `partner2-${unique()}@example.com`,
-      password: "partner-password-1",
+      password: "partner-Password-1!",
       invitationToken: inv.body.token,
     },
   });
@@ -971,7 +1010,7 @@ await check("a solo organisation's owner can scan until a second person joins", 
   assert.equal(partner.body.organisation.id, soloOrg);
 
   const relogin = await call("POST", "/auth/login", {
-    body: { email: soloEmail, password: "solo-password-1" },
+    body: { email: soloEmail, password: "solo-Password-1!" },
   });
   const after = await call("POST", "/scans", { token: relogin.body.session.idToken, body: minimalScan });
   assert.equal(after.status, 403, "owner must stop scanning once the team has a second member");
@@ -1243,7 +1282,7 @@ await check("deleting a member account needs an explicit confirmation and a reas
   });
   const email = invite.body.invitation.email;
   const registered = await call("POST", "/auth/register", {
-    body: { email, password: "doomed-password-1", invitationToken: invite.body.token },
+    body: { email, password: "doomed-Password-1!", invitationToken: invite.body.token },
   });
   const doomedUid = registered.body.user.id;
 
@@ -1306,7 +1345,7 @@ await check("a paid yearly subscription is shared by everyone in the organisatio
   const registered = await call("POST", "/auth/register", {
     body: {
       email: invite.body.invitation.email,
-      password: "subscriber-password-1",
+      password: "subscriber-Password-1!",
       invitationToken: invite.body.token,
     },
   });
@@ -1432,8 +1471,8 @@ await check("an organisation signed up in the app is locked until its first paym
   env.stripe.billNewOrganisations = true;
   try {
     const email = `payer-${unique()}@example.com`;
-    const reg = await call("POST", "/auth/register-admin", {
-      body: { email, password: "payer-password-1", organisationName: "Paying Ltd", tosAccepted: true },
+    const reg = await registerTeam({
+      body: { email, password: "payer-Password-1!", organisationName: "Paying Ltd", tosAccepted: true },
     });
     assert.equal(reg.status, 201, JSON.stringify(reg.body));
     const token = reg.body.session.idToken;
@@ -1489,7 +1528,7 @@ async function plantResetCode(email, uid) {
 }
 
 const forgetfulEmail = `forgetful-${unique()}@example.ac.uk`;
-const forgetfulPassword = "forgetful-password-1";
+const forgetfulPassword = "forgetful-Password-1!";
 let forgetfulUid;
 let forgetfulToken;
 
@@ -1529,7 +1568,7 @@ await check("asking again straight away still gives the same answer", async () =
 await check("a wrong reset code is refused and the password is unchanged", async () => {
   await plantResetCode(forgetfulEmail, forgetfulUid);
   const { status } = await call("POST", "/auth/password-reset", {
-    body: { email: forgetfulEmail, code: "000000", newPassword: "brand-new-password-1" },
+    body: { email: forgetfulEmail, code: "000000", newPassword: "brand-new-Password-1!" },
   });
   assert.equal(status, 400);
   const login = await call("POST", "/auth/login", {
@@ -1550,7 +1589,7 @@ await check("resetting to the current password is refused, and the code still wo
 
 await check("the emailed code resets the password and signs the account out everywhere", async () => {
   const { status, body } = await call("POST", "/auth/password-reset", {
-    body: { email: forgetfulEmail, code: KNOWN_CODE, newPassword: "brand-new-password-1" },
+    body: { email: forgetfulEmail, code: KNOWN_CODE, newPassword: "brand-new-Password-1!" },
   });
   assert.equal(status, 200, JSON.stringify(body));
 
@@ -1559,7 +1598,7 @@ await check("the emailed code resets the password and signs the account out ever
   });
   assert.equal(oldPassword.status, 401);
   const newPassword = await call("POST", "/auth/login", {
-    body: { email: forgetfulEmail, password: "brand-new-password-1" },
+    body: { email: forgetfulEmail, password: "brand-new-Password-1!" },
   });
   assert.equal(newPassword.status, 200, JSON.stringify(newPassword.body));
 
@@ -1569,7 +1608,7 @@ await check("the emailed code resets the password and signs the account out ever
 
 await check("a reset code works only once", async () => {
   const { status } = await call("POST", "/auth/password-reset", {
-    body: { email: forgetfulEmail, code: KNOWN_CODE, newPassword: "yet-another-password-1" },
+    body: { email: forgetfulEmail, code: KNOWN_CODE, newPassword: "yet-another-Password-1!" },
   });
   assert.equal(status, 400);
 });
@@ -1591,7 +1630,7 @@ await check("a reset address over its daily limit still gets the usual answer", 
 
 await check("an address with no account cannot be reset", async () => {
   const { status, body } = await call("POST", "/auth/password-reset", {
-    body: { email: `nobody-${unique()}@example.ac.uk`, code: KNOWN_CODE, newPassword: "whatever-password-1" },
+    body: { email: `nobody-${unique()}@example.ac.uk`, code: KNOWN_CODE, newPassword: "whatever-Password-1!" },
   });
   assert.equal(status, 400);
   assert.match(body.error.message, /no code waiting/i);
@@ -1601,7 +1640,7 @@ group("Account deletion");
 
 await check("deleting your own account removes your scan history with it", async () => {
   const email = `throwaway-${unique()}@example.ac.uk`;
-  const password = "throwaway-password-1";
+  const password = "throwaway-Password-1!";
   const registered = await registerStudent({ email, password });
   const token = registered.body.session.idToken;
   const uid = registered.body.user.id;

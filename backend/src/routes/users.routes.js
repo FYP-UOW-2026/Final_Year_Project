@@ -15,6 +15,7 @@ import { env } from "../config/env.js";
 import { loadProfile, requireAuth } from "../middleware/auth.js";
 import { codeEmailLimiter } from "../middleware/rateLimits.js";
 import { validate, verificationCodeSchema } from "../middleware/validate.js";
+import { strongPasswordSchema } from "../utils/passwordPolicy.js";
 import * as email from "../services/email.service.js";
 import * as loginGuard from "../services/loginGuard.service.js";
 import * as organisations from "../services/organisations.service.js";
@@ -167,7 +168,7 @@ router.post(
   validate({
     body: z.object({
       currentPassword: z.string().min(1, "Enter your current password."),
-      newPassword: z.string().min(8, "Use at least 8 characters.").max(128),
+      newPassword: strongPasswordSchema,
     }),
   }),
   asyncHandler(async (req, res) => {

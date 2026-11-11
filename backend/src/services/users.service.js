@@ -37,6 +37,8 @@ export async function getProfile(uid) {
  *
  * `studentVerified` is for a student whose address was proved with a sign-up code
  * before calling this (see POST /auth/register), so the account starts out verified.
+ * `emailVerified` marks the address as proved in Firebase too; it follows
+ * `studentVerified` unless given, as for a team admin who proved it the same way.
  */
 export async function createAccount({
   email,
@@ -46,6 +48,7 @@ export async function createAccount({
   organisationId = null,
   universityId = null,
   studentVerified = false,
+  emailVerified = studentVerified,
   tosVersion = null,
 }) {
   let userRecord;
@@ -54,14 +57,14 @@ export async function createAccount({
       email,
       password,
       displayName,
-      emailVerified: studentVerified,
+      emailVerified,
     });
   } catch (error) {
     if (error.code === "auth/email-already-exists") {
       throw ApiError.conflict("An account already exists for that email address.");
     }
     if (error.code === "auth/invalid-password") {
-      throw ApiError.badRequest("That password is too short. Use at least six characters.");
+      throw ApiError.badRequest("That password is too weak. Use at least 12 characters with upper, lower, a digit and a symbol.");
     }
     throw error;
   }
@@ -147,7 +150,7 @@ export async function changePassword(uid, newPassword) {
     await auth.updateUser(uid, { password: newPassword });
   } catch (error) {
     if (error.code === "auth/invalid-password") {
-      throw ApiError.badRequest("That password is too short. Use at least six characters.");
+      throw ApiError.badRequest("That password is too weak. Use at least 12 characters with upper, lower, a digit and a symbol.");
     }
     throw error;
   }

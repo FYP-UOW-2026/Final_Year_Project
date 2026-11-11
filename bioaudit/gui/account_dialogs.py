@@ -14,9 +14,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..api import ApiClient, ApiClientError
+from ..api import ApiClient
+from ..password_policy import password_strength_problem
+from .field_error import (
+    MESSAGES, clear_errors, email_message, flag_field, password_message, route_api_error,
+    status_message,
+)
 from .formatting import tidy_code
 from .theme import DARK, ERROR_TEXT, SUCCESS_TEXT
+
+
+_NAME_MAX = 80
 
 
 @dataclass
@@ -108,15 +116,40 @@ def show_profile_dialog(parent, client: ApiClient) -> DialogResult:
             outer.addStretch(1)
             return w
 
+        def _fail(self, field, message: str) -> None:
+            """Show `message` under `field`, and clear the general status line."""
+            self.status.setText("")
+            flag_field(field, message)
+
+        def _fail_request(self, exc, fields, overrides=None, password_key="new_password") -> None:
+            """Show a failed request under the input it names, in catalog wording only.
+
+            `fields` maps a server field name to its input. `overrides` maps an HTTP
+            status to (message key, input or None) - a 401 on a password-checked request
+            means a wrong password, not an expired session. Anything else, and anything
+            not tied to an input, goes to the general status line.
+            """
+            self.status.setText("")
+            route_api_error(exc, fields, lambda text: self._say(text, error=True),
+                            password_key=password_key, overrides=overrides)
+
         def _save_name(self) -> None:
+            clear_errors(self.name_edit)
             name = self.name_edit.text().strip()
+            current = ((client.account.display_name if client.account else "") or "").strip()
             if not name:
-                return self._say("Enter a name.", error=True)
+                return self._fail(self.name_edit, MESSAGES["name"])
+            if len(name) > _NAME_MAX:
+                return self._fail(self.name_edit, MESSAGES["name_long"])
+            if name == current:
+                return self._fail(self.name_edit, MESSAGES["same_name"])
             try:
                 self.setCursor(Qt.WaitCursor)
                 client.update_display_name(name)
-            except ApiClientError as exc:
-                return self._say(str(exc), error=True)
+            except Exception as exc:  # noqa: BLE001 - a slot must not raise
+                self._fail_request(exc, {"displayName": self.name_edit, "name": self.name_edit},
+                                   {409: ("generic", self.name_edit)})
+                return
             finally:
                 self.setCursor(Qt.ArrowCursor)
             result.changed = True
@@ -145,15 +178,30 @@ def show_profile_dialog(parent, client: ApiClient) -> DialogResult:
             return w
 
         def _change_email(self) -> None:
+            clear_errors(self.new_email, self.email_password)
             email = self.new_email.text().strip()
             password = self.email_password.text()
-            if not email or not password:
-                return self._say("Enter the new address and your current password.", error=True)
+            current = (client.account.email if client.account else "").lower()
+            if bad := email_message(email):
+                return self._fail(self.new_email, bad)
+            if email.lower() == current:
+                return self._fail(self.new_email, MESSAGES["same_email"])
+            if not password:
+                return self._fail(self.email_password, MESSAGES["current_password_empty"])
+            # 401/403 here is the password check; 409 is an address already taken, and
+            # 400 is the server rejecting the address itself.
+            wrong = ("current_password", self.email_password)
             try:
                 self.setCursor(Qt.WaitCursor)
                 client.change_email(email, password)
-            except ApiClientError as exc:
-                return self._say(str(exc), error=True)
+            except Exception as exc:  # noqa: BLE001 - a slot must not raise
+                self._fail_request(
+                    exc, {"email": self.new_email, "newEmail": self.new_email,
+                          "password": self.email_password,
+                          "currentPassword": self.email_password},
+                    {401: wrong, 403: wrong, 409: ("email_taken", self.new_email)},
+                    password_key="current_password")
+                return
             finally:
                 self.setCursor(Qt.ArrowCursor)
             result.changed = True
@@ -169,7 +217,7 @@ def show_profile_dialog(parent, client: ApiClient) -> DialogResult:
             self.old_password.setEchoMode(QLineEdit.Password)
             self.new_password = QLineEdit()
             self.new_password.setEchoMode(QLineEdit.Password)
-            self.new_password.setPlaceholderText("At least 8 characters")
+            self.new_password.setPlaceholderText("12+ characters, mixed case, digit, symbol")
             self.confirm_password = QLineEdit()
             self.confirm_password.setEchoMode(QLineEdit.Password)
             form.addRow("Current password:", self.old_password)
@@ -187,20 +235,31 @@ def show_profile_dialog(parent, client: ApiClient) -> DialogResult:
             return w
 
         def _change_password(self) -> None:
+            clear_errors(self.old_password, self.new_password, self.confirm_password)
             old = self.old_password.text()
             new = self.new_password.text()
-            if not old or not new:
-                return self._say("Fill in both password boxes.", error=True)
+            if not old:
+                return self._fail(self.old_password, MESSAGES["current_password_empty"])
+            if not new:
+                return self._fail(self.new_password, MESSAGES["new_password_empty"])
+            if new == old:
+                return self._fail(self.new_password, MESSAGES["password_same"])
+            if problem := password_message(password_strength_problem(new)):
+                return self._fail(self.new_password, problem)
             if new != self.confirm_password.text():
-                return self._say("The new passwords do not match.", error=True)
-            if len(new) < 8:
-                return self._say("Use a new password of at least 8 characters.", error=True)
+                return self._fail(self.confirm_password, MESSAGES["confirm"])
 
+            # 401/403 is the current-password check; any 400 is about the new password.
+            wrong = ("current_password", self.old_password)
             try:
                 self.setCursor(Qt.WaitCursor)
                 client.change_password(old, new)
-            except ApiClientError as exc:
-                return self._say(str(exc), error=True)
+            except Exception as exc:  # noqa: BLE001 - a slot must not raise
+                self._fail_request(
+                    exc, {"currentPassword": self.old_password, "oldPassword": self.old_password,
+                          "newPassword": self.new_password, "password": self.new_password},
+                    {401: wrong, 403: wrong})
+                return
             finally:
                 self.setCursor(Qt.ArrowCursor)
 
@@ -240,11 +299,12 @@ def show_profile_dialog(parent, client: ApiClient) -> DialogResult:
             return w
 
         def _delete_account(self) -> None:
-            if self.delete_confirm.text().strip() != "DELETE":
-                return self._say("Type DELETE in the confirmation box.", error=True)
+            clear_errors(self.delete_password, self.delete_confirm)
             password = self.delete_password.text()
             if not password:
-                return self._say("Enter your current password.", error=True)
+                return self._fail(self.delete_password, MESSAGES["current_password_empty"])
+            if self.delete_confirm.text().strip() != "DELETE":
+                return self._fail(self.delete_confirm, MESSAGES["delete_confirm"])
 
             confirm = QMessageBox.question(
                 self, "Delete account",
@@ -254,11 +314,18 @@ def show_profile_dialog(parent, client: ApiClient) -> DialogResult:
             if confirm != QMessageBox.Yes:
                 return
 
+            # A 409 (sole owner of an organisation with members) is not about either box,
+            # so it goes to the general line; a 401/403 is the password check.
+            wrong = ("current_password", self.delete_password)
             try:
                 self.setCursor(Qt.WaitCursor)
                 client.delete_account(password)
-            except ApiClientError as exc:
-                return self._say(str(exc), error=True)
+            except Exception as exc:  # noqa: BLE001 - a slot must not raise
+                self._fail_request(
+                    exc, {"password": self.delete_password, "confirm": self.delete_confirm},
+                    {401: wrong, 403: wrong, 409: ("owner_blocked", None)},
+                    password_key="current_password")
+                return
             finally:
                 self.setCursor(Qt.ArrowCursor)
 
@@ -317,16 +384,23 @@ def show_join_organisation_dialog(parent, client: ApiClient) -> DialogResult:
             layout.addWidget(buttons)
 
         def _join(self) -> None:
+            clear_errors(self.token_edit)
+            self.status.setText("")
             token = self.token_edit.toPlainText().strip()
-            if len(token) < 16:
-                self.status.setText(
-                    f"<span style='color:{ERROR_TEXT}'>That does not look like a valid token.</span>")
-                return
+            if not token:
+                return flag_field(self.token_edit, MESSAGES["token"])
+            if len(token) < 16 or any(c.isspace() for c in token):
+                return flag_field(self.token_edit, MESSAGES["token"])
             try:
                 self.setCursor(Qt.WaitCursor)
                 joined = client.join_organisation(token)
-            except ApiClientError as exc:
-                self.status.setText(f"<span style='color:{ERROR_TEXT}'>{exc}</span>")
+            except Exception as exc:  # noqa: BLE001 - a slot must not raise
+                # Used, expired, wrong, or already in an organisation: all one wording.
+                bad = ("token", self.token_edit)
+                route_api_error(
+                    exc, {"invitationToken": self.token_edit, "token": self.token_edit},
+                    lambda text: self.status.setText(f"<span style='color:{ERROR_TEXT}'>{text}</span>"),
+                    overrides={400: bad, 404: bad, 409: bad, 410: bad})
                 return
             finally:
                 self.setCursor(Qt.ArrowCursor)
@@ -435,26 +509,37 @@ def show_student_verification_dialog(parent, client: ApiClient) -> DialogResult:
             self.status.setText(f"<span style='color:{colour}'>{message}</span>")
 
         def _resend(self) -> None:
+            clear_errors(self.code_edit)
             try:
                 self.setCursor(Qt.WaitCursor)
                 message = client.send_student_code()
-            except ApiClientError as exc:
-                self._show(str(exc), error=True)
+            except Exception as exc:  # noqa: BLE001 - a slot must not raise
+                # Sending is not about the code box (rate limit, already verified, not
+                # required), so it uses the general line.
+                self._show(status_message(exc), error=True)
                 return
             finally:
                 self.setCursor(Qt.ArrowCursor)
             self._show(message, error=False)
 
         def _verify(self) -> None:
+            clear_errors(self.code_edit)
+            self.status.setText("")
             code = self.code_edit.text().strip()
+            if not code:
+                return flag_field(self.code_edit, MESSAGES["code"])
             if len(code) != 6 or not code.isdigit():
-                self._show("Enter the six-digit code from the email.", error=True)
-                return
+                return flag_field(self.code_edit, MESSAGES["code"])
             try:
                 self.setCursor(Qt.WaitCursor)
                 client.verify_student_code(code)
-            except ApiClientError as exc:
-                self._show(str(exc), error=True)
+            except Exception as exc:  # noqa: BLE001 - a slot must not raise
+                # Wrong, expired, none waiting, already verified: all one wording.
+                bad = ("code", self.code_edit)
+                route_api_error(
+                    exc, {"code": self.code_edit},
+                    lambda text: self._show(text, error=True),
+                    overrides={400: bad, 401: bad, 404: bad, 409: bad, 410: bad})
                 return
             finally:
                 self.setCursor(Qt.ArrowCursor)

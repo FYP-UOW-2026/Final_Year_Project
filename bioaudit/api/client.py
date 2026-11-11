@@ -258,17 +258,21 @@ class ApiClient:
 
     # --- authentication ---------------------------------------------------
 
-    def send_signup_code(self, email: str, university_id: Optional[str] = None) -> dict:
-        """Email the code a student signs up with.
+    def send_signup_code(self, email: str, university_id: Optional[str] = None,
+                         account_type: str = "student") -> dict:
+        """Email the code someone signs up with.
 
-        The first step of registering a personal account: the code proves the
-        university address before the account exists. Pass it on to register().
-        Returns the server's reply: "message" to show, and "sendId" for
-        signup_code_status().
+        The first step of creating an account: the code proves the address before the
+        account exists. Pass it on to register(), or with account_type="team" to
+        register_admin(). Returns the server's reply: "message" to show, and "sendId"
+        for signup_code_status(). The reply is the same whether or not the address
+        already has an account, so it never says which.
         """
         payload = {"email": email}
         if university_id:
             payload["universityId"] = university_id
+        if account_type != "student":
+            payload["accountType"] = account_type
         return self._request("POST", "/auth/register/send-code", body=payload,
                              authenticated=False)
 
@@ -311,15 +315,19 @@ class ApiClient:
     def register_admin(self, email: str, password: str, organisation_name: str,
                        display_name: Optional[str] = None,
                        tos_accepted: bool = False,
-                       solo: bool = False) -> tuple[Account, dict]:
+                       solo: bool = False,
+                       code: Optional[str] = None) -> tuple[Account, dict]:
         """Create an admin account together with the organisation it administers.
 
+        `code` is the one send_signup_code(email, account_type="team") emailed.
         solo=True marks a one-person team (freelancer): while the owner is its only
         member they may run scans themselves.
         """
         payload = {"email": email, "password": password,
                    "organisationName": organisation_name,
                    "tosAccepted": bool(tos_accepted)}
+        if code:
+            payload["code"] = _clean_code(code)
         if solo:
             payload["solo"] = True
         if display_name:

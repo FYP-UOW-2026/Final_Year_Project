@@ -405,7 +405,7 @@ router.post(
   validate({
     params: z.object({ orgId: z.string().min(1), flagId: z.string().min(1) }),
     body: z.object({
-      decision: z.enum(["uphold", "dismiss"]),
+      decision: z.enum(["resolve", "uphold", "dismiss"]),
       note: z.string().trim().max(1000).optional(),
     }),
   }),

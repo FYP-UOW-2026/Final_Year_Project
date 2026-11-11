@@ -17,6 +17,7 @@ whichever PC happened to have its own GEMINI_API_KEY set.
 """
 
 import os
+import sys
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
@@ -69,6 +70,7 @@ datas += [("config", "config")]
 # Bundled UI fonts (IBM Plex Sans, JetBrains Mono) and their OFL licences, loaded by
 # theme.load_fonts() from the same relative path inside the frozen app.
 datas += [("bioaudit/gui/fonts", "bioaudit/gui/fonts")]
+datas += [("bioaudit/gui/assets", "bioaudit/gui/assets")]
 
 
 a = Analysis(
@@ -107,6 +109,7 @@ exe = EXE(
     a.datas,
     [],
     name="BioAudit",
+    icon="bioaudit/gui/assets/BioAudit.ico" if sys.platform == "win32" else "bioaudit/gui/assets/BioAudit.icns",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -120,3 +123,18 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+
+# macOS: wrap in a .app so the Dock and menu bar say "BioAudit" (a bare process shows
+# its executable/interpreter name) and use the bundle icon.
+if sys.platform == "darwin":
+    app = BUNDLE(
+        exe,
+        name="BioAudit.app",
+        icon="bioaudit/gui/assets/BioAudit.icns",
+        bundle_identifier="com.bioaudit.app",
+        info_plist={
+            "CFBundleName": "BioAudit",
+            "CFBundleDisplayName": "BioAudit",
+            "NSHighResolutionCapable": True,
+        },
+    )

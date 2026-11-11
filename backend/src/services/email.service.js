@@ -265,6 +265,67 @@ export function sendPasswordResetCode({ to, code, expiresInMinutes, variables })
   return deliver({ to, ...passwordResetEmail({ code, expiresInMinutes }), variables });
 }
 
+/** The code someone setting up a team signs up with. Built like the other code emails. */
+export function teamSignupEmail({ code, expiresInMinutes }) {
+  const subject = `${code} is your BioAudit verification code`;
+  const ignoreNote =
+    "If you did not try to create a BioAudit account, you can ignore this email. Nobody " +
+    "can use this address without the code, and BioAudit will never ask you for it.";
+
+  const text = [
+    "Confirm your email address.",
+    "",
+    "Enter this code in BioAudit to finish creating your team account:",
+    "",
+    `    ${code}`,
+    "",
+    `The code expires in ${expiresInMinutes} minutes and can only be used once.`,
+    "",
+    ignoreNote,
+  ].join("\n");
+
+  const html = codeEmailHtml({
+    heading: "Confirm your email address",
+    lead: "Enter this code in BioAudit to finish creating your team account.",
+    code,
+    expiresInMinutes,
+    ignoreNote,
+  });
+
+  return { subject, text, html };
+}
+
+export function sendTeamSignupCode({ to, code, expiresInMinutes, variables }) {
+  return deliver({ to, ...teamSignupEmail({ code, expiresInMinutes }), variables });
+}
+
+/**
+ * What an address that already has an account gets when someone tries to sign up with it.
+ *
+ * Sign-up answers "code sent" either way, so it cannot be used to find out who has an
+ * account; this is what goes out in place of the code. It contains no code, so it is
+ * only of use to the owner, who most likely forgot they had signed up.
+ */
+export function accountExistsEmail() {
+  return {
+    subject: "You already have a BioAudit account",
+    text: [
+      "Someone just tried to create a BioAudit account with this email address, but you",
+      "already have one, so no new account was made.",
+      "",
+      "If that was you, sign in instead. Forgotten your password? Choose \"Forgot",
+      "password?\" on the sign-in screen and we will email you a code to reset it.",
+      "",
+      "If it was not you, you can ignore this email. Your account has not changed, and",
+      "nobody can get into it with this email alone.",
+    ].join("\n"),
+  };
+}
+
+export function sendAccountExistsNotice({ to, variables }) {
+  return deliver({ to, ...accountExistsEmail(), variables });
+}
+
 /**
  * The verification email's subject, plain text and HTML.
  *

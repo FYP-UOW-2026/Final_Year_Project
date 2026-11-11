@@ -14,6 +14,8 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+from .masking import mask_serial
+
 
 class AdbError(RuntimeError):
     pass
@@ -140,10 +142,11 @@ class Adb:
             raise AdbError("no authorized device connected (check USB debugging)")
         if self.serial:
             if self.serial not in serials:
-                raise AdbError(f"configured serial '{self.serial}' not connected")
+                raise AdbError(f"configured serial '{mask_serial(self.serial)}' not connected")
             return self.serial
         if len(serials) > 1:
-            raise AdbError(f"multiple devices connected; set device.serial: {serials}")
+            raise AdbError("multiple devices connected; set device.serial: "
+                           f"{[mask_serial(s) for s in serials]}")
         self.serial = serials[0]
         return self.serial
 
