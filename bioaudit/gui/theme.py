@@ -248,6 +248,7 @@ QPushButton {{
     padding: 8px 16px;
     min-height: 20px;
     font-weight: 600;
+    outline: none;
 }}
 QPushButton:hover {{ background: {p["disabled_bg"]}; border-color: {p["muted"]}; }}
 QPushButton:pressed {{ background: {p["window"]}; }}
@@ -296,6 +297,31 @@ QPushButton#segment:checked {{
     border-color: {p["primary"]};
 }}
 
+/* --- history table --------------------------------------------------- */
+QLabel#historyTitle {{ color: {p["text"]}; font-size: 20pt; font-weight: 700; background: transparent; }}
+QTableWidget {{
+    background: {p["surface"]};
+    border: 1px solid {p["border"]};
+    border-radius: 8px;
+    gridline-color: transparent;
+}}
+QTableWidget::item {{ border-bottom: 1px solid {p["border"]}; }}
+QTableWidget QLabel {{ background: transparent; }}
+QHeaderView::section {{
+    background: {p["surface"]};
+    color: {p["muted"]};
+    border: none;
+    border-bottom: 1px solid {p["border"]};
+    padding: 8px 10px;
+    font-weight: 600;
+}}
+QPushButton[ghost="true"] {{
+    background: transparent;
+    border: 1px solid {p["border"]};
+    color: {p["text"]};
+}}
+QPushButton[ghost="true"]:hover {{ border-color: {p["primary"]}; }}
+QPushButton[ghost="true"]:pressed {{ background: {p["surface_alt"]}; border-color: {p["primary"]}; color: {p["primary"]}; }}
 /* --- home tiles ------------------------------------------------------ */
 {tiles}
 QLabel#tileIcon {{ background: transparent; }}
@@ -487,8 +513,19 @@ QLabel#sectionHeading {{ color: {p["text"]}; font-size: 11pt; font-weight: 600; 
 
 def apply_theme(app) -> dict:
     """Style the application and return the palette that was used."""
+    from PySide6.QtWidgets import QProxyStyle, QStyle
+
+    class _NoFocusRect(QProxyStyle):
+        """Skip the native dotted focus rectangle; the themed focus ring stays."""
+
+        def drawPrimitive(self, element, option, painter, widget=None):
+            if element == QStyle.PE_FrameFocusRect:
+                return
+            super().drawPrimitive(element, option, painter, widget)
+
     load_fonts()
     p = palette_for(app)
+    app.setStyle(_NoFocusRect(app.style()))
     app.setStyleSheet(stylesheet(p))
     return p
 

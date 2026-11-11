@@ -182,7 +182,7 @@ def run(cfg: Config | None = None) -> int:
         QTextBrowser, QVBoxLayout, QWidget,
     )
 
-    from . import team, theme
+    from . import history_view, team, theme
 
     # --- small layout helpers, shared by every tab --------------------------
     # Grouping controls into titled cards is what turns a flat stack of widgets into
@@ -380,6 +380,8 @@ def run(cfg: Config | None = None) -> int:
             # Separate thread pair for auto-explain, so it can run independently of a
             # scan/assess job (e.g. after a retry-upload, with no job in flight).
             self._explain_thread: QThread | None = None
+            self._history_load_thread: QThread | None = None
+            self._history_load_worker = None
             # And one for fetching ADB, which needs no job widgets at all.
             self._adb_thread: QThread | None = None
             self._explain_worker: Worker | None = None
@@ -493,7 +495,8 @@ def run(cfg: Config | None = None) -> int:
             thread is waited for instead, with the window already hidden so the wait
             for the current step to end is not spent looking at a frozen window.
             """
-            busy = [t for t in (self._thread, self._explain_thread, self._adb_thread)
+            busy = [t for t in (self._thread, self._explain_thread, self._adb_thread,
+                                 self._history_load_thread)
                     if t is not None and t.isRunning()]
             if busy:
                 if QMessageBox.question(
@@ -566,7 +569,7 @@ def run(cfg: Config | None = None) -> int:
                                QIcon.Normal, QIcon.On)
                 btn.setIcon(icon)
                 btn.setIconSize(QSize(18, 18))
-                btn.clicked.connect(lambda _checked=False, i=index: self.tabs.setCurrentIndex(i))
+                btn.clicked.connect(lambda _checked=False, i=index: self._on_nav_clicked(i))
                 self.nav_group.addButton(btn, index)
                 self.nav_buttons.append(btn)
                 layout.addWidget(btn)
@@ -606,6 +609,13 @@ def run(cfg: Config | None = None) -> int:
             btn = self.nav_group.button(index)
             if btn is not None:
                 btn.setChecked(True)
+
+        def _on_nav_clicked(self, index: int) -> None:
+            self.tabs.setCurrentIndex(index)
+            # Clicking History always lands on the list, even from an open report
+            # (re-clicking the current tab emits no currentChanged).
+            if index == self._history_tab_index:
+                self._history_page.show_list()
 
         def _sync_nav(self) -> None:
             """Show a nav item only while its page is available to this account."""
@@ -860,7 +870,7 @@ def run(cfg: Config | None = None) -> int:
 
             Enabled whenever there is a scan to save, for every account tier. Called
             whenever the account might have changed (_refresh_account_ui) and whenever
-            the History selection changes (_show_history_run), not just right after a job finishes -- otherwise a run
+            the History selection changes (_open_history_scan), not just right after a job finishes -- otherwise a run
             saved while signed out stays showing a save button with nothing behind it.
             """
             tooltip = "Download this run's report from your account."
@@ -869,7 +879,7 @@ def run(cfg: Config | None = None) -> int:
                 btn.setEnabled(bool(self.api) and bool(self._last_scan_id))
                 btn.setToolTip(tooltip)
 
-            history_ok = 0 <= self.history_combo.currentIndex() < len(self._history_ids)
+            history_ok = self._history_selected_index() >= 0
             self.history_save_report_btn.setEnabled(bool(self.api) and history_ok)
             self.history_open_report_btn.setEnabled(bool(self.api) and history_ok)
             self.history_save_report_btn.setToolTip(tooltip)
@@ -1725,23 +1735,19 @@ def run(cfg: Config | None = None) -> int:
         # ---- History tab -------------------------------------------------- #
 
         def _build_history_tab(self) -> QWidget:
-            w = QWidget()
-            layout = QVBoxLayout(w)
+            self._history_page = history_view.make_history_page(
+                self.palette_colours, on_open=self._open_history_scan,
+                on_refresh=self._reload_history, on_clear=self._clear_history)
+
+            report = QWidget()
+            layout = QVBoxLayout(report)
             layout.setContentsMargins(16, 12, 16, 12)
             layout.setSpacing(10)
 
-            picker, pl = _section("Your saved runs", accent="history")
-            top = QHBoxLayout()
-            top.setSpacing(8)
-            self.history_combo = QComboBox()
-            reload_btn = QPushButton("Reload")
-            reload_btn.clicked.connect(self._reload_history)
-            top.addWidget(self.history_combo, 1)
-            top.addWidget(reload_btn)
-            pl.addLayout(top)
-
             actions = QHBoxLayout()
             actions.setSpacing(8)
+            back_btn = QPushButton("Back")
+            back_btn.clicked.connect(self._history_page.show_list)
             self.compare_btn = QPushButton("Compare two runs…")
             self.compare_btn.setEnabled(False)
             self.compare_btn.clicked.connect(self._compare_runs)
@@ -1753,36 +1759,40 @@ def run(cfg: Config | None = None) -> int:
             self.history_save_report_btn.clicked.connect(self._save_history_report)
             self.delete_run_btn = QPushButton("Delete this run")
             self.delete_run_btn.clicked.connect(self._delete_history_run)
-            self.clear_history_btn = QPushButton("Clear all history")
-            self.clear_history_btn.clicked.connect(self._clear_history)
+            actions.addWidget(back_btn)
             actions.addWidget(self.compare_btn)
             actions.addWidget(self.history_open_report_btn)
             actions.addWidget(self.history_save_report_btn)
             actions.addStretch(1)
             actions.addWidget(self.delete_run_btn)
-            actions.addWidget(self.clear_history_btn)
-            pl.addLayout(actions)
-            layout.addWidget(picker)
-
-            self.history_combo.currentIndexChanged.connect(self._show_history_run)
+            layout.addLayout(actions)
 
             self.history_results = QTextBrowser()
             self.history_results.setOpenExternalLinks(True)
             layout.addWidget(self.history_results, 1)
+            self._history_page.add_report_widget(report)
 
             self._history_ids: list[str] = []
+            self._history_scans: list[dict] = []
+            self._history_selected_id: "str | None" = None
             self._reload_history()
-            return w
+            return self._history_page
+
+        def _history_selected_index(self) -> int:
+            """Index of the open run in `_history_ids`, or -1 when none is open."""
+            try:
+                return self._history_ids.index(self._history_selected_id)
+            except ValueError:
+                return -1
 
         def _reload_history(self) -> None:
-            """Refill the picker from the account's history on the server.
+            """Refill the History table from the account's history on the server.
 
             The only history there is: BioAudit keeps no local copy of a scan. Called
             before the welcome gate has necessarily resolved (during tab construction),
             so it tolerates `self.api` still being None rather than assuming sign-in.
             """
-            self.history_combo.blockSignals(True)
-            self.history_combo.clear()
+            self._history_scans = []
             self._history_ids = []
             limit = None
             load_error = None
@@ -1790,13 +1800,8 @@ def run(cfg: Config | None = None) -> int:
                 try:
                     data = self.api.list_history(limit=100)
                     limit = data.get("historyLimit")
-                    for scan in data.get("scans", []):
-                        sev = severity_summary(scan.get("counts") or {})
-                        target = scan.get("target") or {}
-                        label = target.get("packageName") or target.get("apkFileName") or "unknown"
-                        when = format_when(scan.get("createdAt"))
-                        self.history_combo.addItem(f"{when}  ·  {label}  ·  {sev}")
-                        self._history_ids.append(scan["id"])
+                    self._history_scans = [s for s in data.get("scans", []) if s.get("id")]
+                    self._history_ids = [s["id"] for s in self._history_scans]
                 except Exception as exc:  # noqa: BLE001
                     # Deliberately not the status bar: this can run right after a job
                     # finished and left a more important message there (e.g. "not saved
@@ -1804,44 +1809,81 @@ def run(cfg: Config | None = None) -> int:
                     # worth overwriting that with.
                     load_error = str(exc)
                     _log_diag(f"history reload failed: {load_error}")
-            self.history_combo.blockSignals(False)
+            if self._history_selected_id not in self._history_ids:
+                self._history_selected_id = None
+                self._history_page.show_list()
+            self._history_page.set_scans(self._history_scans, error=load_error, limit=limit)
             self._update_compare_button()
-            if load_error:
-                self.history_results.setHtml(theme.empty_state_html(
-                    "Could not load your history",
-                    [load_error, "Click Reload to try again."], self.palette_colours))
-            elif self._history_ids:
-                self._show_history_run(0)
-            else:
-                lines = ["Run a scan or an assessment first.",
-                         "Every finished run is saved to your account automatically."]
-                if limit is not None:
-                    lines.append(f"A student account keeps the newest {limit} runs.")
-                self.history_results.setHtml(
-                    theme.empty_state_html("No runs yet", lines, self.palette_colours))
-
-        def _show_history_run(self, index: int) -> None:
             self._update_save_report_buttons()
-            if self.api is None or index < 0 or index >= len(self._history_ids):
+
+        def _open_history_scan(self, scan_id: str) -> None:
+            """View Report: switch to the report page at once, fetch the run off-thread.
+
+            The fetch is a network call; doing it on the UI thread froze the window with
+            no sign the click had registered. Now the click is acknowledged immediately
+            (row highlight, busy cursor, "Loading report" page) and the result is drawn
+            by `_on_history_scan_loaded` when the worker finishes.
+            """
+            if self.api is None or scan_id not in self._history_ids:
                 return
-            try:
-                scan = self.api.get_scan(self._history_ids[index])
-            except Exception as exc:  # noqa: BLE001
+            if self._history_load_thread is not None:
+                return   # one fetch at a time; ignores double clicks
+            self._history_selected_id = scan_id
+            self._update_save_report_buttons()
+            self._history_page.mark_opening(scan_id)
+            self.history_results.setHtml(theme.empty_state_html(
+                "Loading report…", ["Fetching this run from your account."],
+                self.palette_colours))
+            self._history_page.show_report()
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            self.statusBar().showMessage("Loading report…")
+
+            api = self.api
+
+            def job(_progress):
+                try:
+                    return scan_id, api.get_scan(scan_id), None
+                except Exception as exc:  # noqa: BLE001 - shown in the report pane
+                    return scan_id, None, str(exc)
+
+            self._history_load_thread = QThread()
+            self._history_load_worker = Worker(job)
+            self._history_load_worker.moveToThread(self._history_load_thread)
+            self._history_load_thread.started.connect(self._history_load_worker.run)
+            self._history_load_worker.finished.connect(self._on_history_scan_loaded)
+            self._history_load_thread.start()
+
+        def _on_history_scan_loaded(self, result) -> None:
+            scan_id, scan, error = result
+            if self._history_load_thread is not None:
+                self._history_load_thread.quit()
+                self._history_load_thread.wait()
+            self._history_load_thread = None
+            self._history_load_worker = None
+            QApplication.restoreOverrideCursor()
+            self._history_page.mark_opening(None)
+            self.statusBar().clearMessage()
+            if scan_id != self._history_selected_id:
+                return   # user went Back / picked another run meanwhile
+            if error is not None:
                 self.history_results.setHtml(
-                    f"<pre style='color:{theme.ERROR_TEXT}; white-space:pre-wrap'>{_escape(exc)}</pre>")
-                return
-            self.history_results.setHtml(_payload_to_html(scan))
+                    f"<pre style='color:{theme.ERROR_TEXT}; white-space:pre-wrap'>{_escape(error)}</pre>")
+            else:
+                self.history_results.setHtml(_payload_to_html(scan))
 
         def _delete_history_run(self) -> None:
             if self.api is None:
                 return
-            index = self.history_combo.currentIndex()
-            if index < 0 or index >= len(self._history_ids):
-                QMessageBox.information(self, "Nothing selected", "Pick a run from the list first.")
+            index = self._history_selected_index()
+            if index < 0:
+                QMessageBox.information(self, "Nothing selected", "Open a run from the list first.")
                 return
 
             run_id = self._history_ids[index]
-            label = self.history_combo.currentText()
+            scan = self._history_scans[index]
+            label = (f"{format_when(scan.get('createdAt'))}  ·  "
+                     f"{history_view.package_of(scan)}  ·  "
+                     f"{severity_summary(scan.get('counts') or {})}")
             if QMessageBox.question(
                 self, "Delete run",
                 f"Permanently delete this run from your account?\n\n{label}",
@@ -1961,6 +2003,7 @@ def run(cfg: Config | None = None) -> int:
                 self.setCursor(Qt.ArrowCursor)
 
             self.history_results.setHtml(_comparison_html(comparison, self.palette_colours))
+            self._history_page.show_report()
             summary = comparison["summary"]
             self.statusBar().showMessage(
                 f"Comparison: {summary['resolved']} fixed, {summary['introduced']} new, "
@@ -2330,8 +2373,8 @@ def run(cfg: Config | None = None) -> int:
             finished this session (self._last_scan_id); this one saves an older run picked
             from the account's history instead.
             """
-            index = self.history_combo.currentIndex()
-            if self.api is None or not (0 <= index < len(self._history_ids)):
+            index = self._history_selected_index()
+            if self.api is None or index < 0:
                 return
             scan_id = self._history_ids[index]
             path, _ = QFileDialog.getSaveFileName(
@@ -2360,8 +2403,8 @@ def run(cfg: Config | None = None) -> int:
             Rendered from the server copy into a temp file; unlike _save_history_report
             this is not team-gated and does not ask where to save.
             """
-            index = self.history_combo.currentIndex()
-            if self.api is None or not (0 <= index < len(self._history_ids)):
+            index = self._history_selected_index()
+            if self.api is None or index < 0:
                 return
             scan_id = self._history_ids[index]
             try:

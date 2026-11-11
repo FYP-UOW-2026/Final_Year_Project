@@ -198,6 +198,8 @@ def make_register_form(base_url: str):
             self.team_password = password_field("At least 12 characters, mixed case, digit, symbol")
             self.team_confirm = password_field("Retype password")
             self.team_solo = QCheckBox("I work alone (freelancer or consultant)")
+            self.team_code, self.team_send_btn, self.team_code_status, team_code_row = (
+                self._code_row())
 
             form.addRow("Organisation:", self.team_org)
             form.addRow("Name:", self.team_name)
