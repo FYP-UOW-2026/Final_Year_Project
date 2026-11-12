@@ -68,8 +68,8 @@ def test_row_click_opens_report():
     opened = []
     page = hv.make_history_page(theme.DARK, opened.append, lambda: None, lambda: None)
     page.set_scans([scan("a", 100, {"high": 1}), scan("b", 50)])
-    page.table.cellClicked.emit(1, 1)
-    page.table.cellClicked.emit(0, 4)  # button column: handled by the button itself
+    page.table.cellClicked.emit(1, 2)
+    page.table.cellClicked.emit(0, 5)  # button column: handled by the button itself
     assert opened == [page._row_ids[1]]
 
 
@@ -85,7 +85,54 @@ def test_mark_opening_highlights_and_clears():
     page.set_scans([scan("a", 100, {"high": 1}), scan("b", 50)])
     target = page._row_ids[1]
     page.mark_opening(target)
-    assert theme.DARK["surface_alt"] in page.table.cellWidget(1, 0).styleSheet()
-    assert page.table.cellWidget(0, 0).styleSheet() == ""
+    assert theme.DARK["surface_alt"] in page.table.cellWidget(1, 1).styleSheet()
+    assert page.table.cellWidget(0, 1).styleSheet() == ""
     page.mark_opening(None)
-    assert page.table.cellWidget(1, 0).styleSheet() == ""
+    assert page.table.cellWidget(1, 1).styleSheet() == ""
+
+
+def test_toggle_and_prune_selection():
+    sel = hv.toggle_selection(set(), "a", True)
+    sel = hv.toggle_selection(sel, "b", True)
+    assert sel == {"a", "b"}
+    assert hv.toggle_selection(sel, "a", False) == {"b"}
+    assert hv.prune_selection({"a", "gone"}, [{"id": "a"}, {"id": "c"}]) == {"a"}
+
+
+def test_confirm_code():
+    from bioaudit.gui.confirm_dialog import make_code, matches, CODE_ALPHABET
+    code = make_code()
+    assert code.startswith("DELETE-") and len(code) == len("DELETE-") + 4
+    assert all(c in CODE_ALPHABET for c in code[7:])
+    assert matches(code, f"  {code} ")
+    assert not matches(code, code.lower())
+    assert not matches(code, "")
+    assert not matches("", "")
+
+
+def test_filter_findings():
+    from bioaudit.models import Finding, Severity, TestRun
+    from bioaudit.report.generator import filter_findings
+    run = TestRun(package="com.a")
+    for sev in (Severity.HIGH, Severity.LOW):
+        run.findings.append(Finding(category="c", title="t", severity=sev, owasp=[],
+                                    evidence="e", source="s"))
+    assert len(filter_findings(run)) == 2
+    assert [f.severity.label for f in filter_findings(run, {"High"})] == ["High"]
+    assert filter_findings(run, set()) == []
+
+
+def test_severity_anchors():
+    from bioaudit.models import Finding, Severity, TestRun
+    from bioaudit.report.generator import render_html, severity_anchor
+    assert severity_anchor("High") == "sev-high"
+    run = TestRun(package="com.a")
+    for sev in (Severity.LOW, Severity.HIGH, Severity.HIGH):
+        run.findings.append(Finding(category="c", title="t", severity=sev, owasp=[],
+                                    evidence="e", source="s"))
+    screen = render_html(run, dark=True)
+    assert screen.count('<a name="sev-high">') == 1
+    assert screen.count('<a name="sev-low">') == 1
+    assert 'name="sev-medium"' not in screen
+    assert screen.index('name="sev-high"') < screen.index('name="sev-low"')
+    assert "sev-" not in render_html(run)

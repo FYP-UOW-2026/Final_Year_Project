@@ -141,6 +141,25 @@ QPushButton[tileAccent]:pressed {{ background: {p["window"]}; }}
     # every card would make green mean "decoration" instead of "run".
     section_accents = ""
 
+    sev_buttons = "".join(f"""
+QPushButton[sev="{name}"] {{
+    background: {colour};
+    color: #ffffff;
+    border: 2px solid {colour};
+    border-radius: 14px;
+    padding: 4px 14px;
+    font-weight: 700;
+}}
+QPushButton[sev="{name}"]:hover {{ border-color: #ffffff; }}
+QPushButton[sev="{name}"]:pressed {{ background: {p["surface_alt"]}; color: {colour}; }}
+""" for name, colour in SEVERITY_COLOURS.items())
+    sev_buttons += f"""
+QPushButton[danger="true"] {{
+    background: {SEVERITY_COLOURS["critical"]}; color: #ffffff; border: none; font-weight: 700;
+}}
+QPushButton[danger="true"]:hover {{ background: #991b1b; }}
+QPushButton[danger="true"]:disabled {{ background: {p["surface_alt"]}; color: {p["muted"]}; }}
+"""
     return f"""
 /* --- base ---------------------------------------------------------- */
 QWidget {{
@@ -324,6 +343,7 @@ QPushButton[ghost="true"]:hover {{ border-color: {p["primary"]}; }}
 QPushButton[ghost="true"]:pressed {{ background: {p["surface_alt"]}; border-color: {p["primary"]}; color: {p["primary"]}; }}
 /* --- home tiles ------------------------------------------------------ */
 {tiles}
+{sev_buttons}
 QLabel#tileIcon {{ background: transparent; }}
 QLabel#tileTitle {{ color: {p["text"]}; font-size: 13pt; font-weight: 700; background: transparent; }}
 QLabel#tileSubtitle {{ color: {p["muted"]}; font-size: 9.5pt; background: transparent; }}
@@ -528,34 +548,6 @@ def apply_theme(app) -> dict:
     app.setStyle(_NoFocusRect(app.style()))
     app.setStyleSheet(stylesheet(p))
     return p
-
-
-def severity_chips_html(counts: dict, palette: dict) -> str:
-    """A row of coloured count badges for a finished run.
-
-    Shows only the severities that actually occurred, so a clean result reads as one
-    calm line rather than five zeros the reader has to scan past.
-    """
-    order = ["critical", "high", "medium", "low", "info"]
-    present = [(name, counts.get(name.capitalize(), counts.get(name, 0))) for name in order]
-    present = [(name, n) for name, n in present if n]
-
-    if not present:
-        return (
-            f"<span style='color:{palette['muted']}'>No findings. "
-            f"That is not proof the app is safe, only that these checks found nothing."
-            f"</span>"
-        )
-
-    chips = []
-    for name, n in present:
-        colour = SEVERITY_COLOURS[name]
-        chips.append(
-            f"<span style='background:{colour};color:#ffffff;padding:2px 9px;"
-            f"border-radius:10px;font-weight:700;font-size:9pt'>"
-            f"{n} {name.capitalize()}</span>"
-        )
-    return "&nbsp;&nbsp;".join(chips)
 
 
 def empty_state_html(title: str, lines: list[str], palette: dict) -> str:

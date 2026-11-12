@@ -21,10 +21,20 @@ _DARK_CSS = (
 )
 
 
-def render_html(run: TestRun, dark: bool = False) -> str:
-    """`dark=True` is for the dark on-screen viewer only; exported files stay light."""
+def filter_findings(run: TestRun, severities=None) -> list:
+    """Findings most severe first. `severities` is a set of labels ("High", ...) to keep;
+    None keeps everything."""
+    ranked = run.ranked()
+    if severities is None:
+        return ranked
+    return [f for f in ranked if f.severity.label in severities]
+
+
+def render_html(run: TestRun, dark: bool = False, severities=None) -> str:
+    """`dark=True` is for the dark on-screen viewer only; exported files stay light and
+    always contain every finding (`severities` applies to the on-screen view only)."""
     if dark:
-        return _render_screen(run)
+        return _render_screen(run, severities)
     counts = run.counts()
     rows = []
     for f in run.ranked():
@@ -113,7 +123,12 @@ def _render_attack_path(finding) -> str:
     return f'<div class="evidence"><em>Attack path:</em><ol>{steps}</ol></div>'
 
 
-def _render_screen(run: TestRun) -> str:
+def severity_anchor(label: str) -> str:
+    """Anchor name of the first finding of a severity in the on-screen report."""
+    return "sev-" + label.lower()
+
+
+def _render_screen(run: TestRun, severities=None) -> str:
     """The report as shown inside the desktop app's results pane.
 
     That pane is a Qt QTextBrowser, which supports only part of HTML and CSS: it ignores
@@ -146,8 +161,10 @@ def _render_screen(run: TestRun) -> str:
 
     counts = run.counts()
     # Most severe first; counts() runs Info to Critical.
-    chips = "&nbsp;&nbsp;".join(badge(k, f"{v} {k}")
-                                for k, v in reversed(list(counts.items())) if v)
+    # Each chip links to the first finding of that severity (anchor "sev-<label>" below).
+    chips = "&nbsp;&nbsp;".join(
+        f'<a href="#{severity_anchor(k)}" style="text-decoration:none">{badge(k, f"{v} {k}")}</a>'
+        for k, v in reversed(list(counts.items())) if v)
     meta = [("Package", run.package), ("Device model", run.device_model),
             ("App version", run.app_version), ("Android version", run.android_version),
             ("Login state", run.login_state)]
@@ -162,7 +179,13 @@ def _render_screen(run: TestRun) -> str:
                 f'<ul style="margin-top:2px;color:{p["text"]}">{tests}</ul>' if tests else ""))
 
     findings = []
-    for f in run.ranked():
+    anchored: set[str] = set()
+    for f in filter_findings(run, severities):
+        label = f.severity.label
+        sev_badge = badge(label, label)
+        if label not in anchored:   # findings are ranked, so this is the first of its severity
+            anchored.add(label)
+            sev_badge = f'<a name="{severity_anchor(label)}">{sev_badge}</a>'
         detail = " · ".join(x for x in (", ".join(f.owasp + f.masvs), f.confidence, f.component) if x)
         path = ""
         if f.attack_path:
@@ -170,7 +193,7 @@ def _render_screen(run: TestRun) -> str:
             path = (f'<p style="margin:10px 0 0 0;color:{p["muted"]};font-weight:600">Attack path</p>'
                     f'<ol style="margin-top:2px;color:{p["text"]}">{steps}</ol>')
         findings.append(card(
-            f'<p style="margin:0">{badge(f.severity.label, f.severity.label)}&nbsp;&nbsp;'
+            f'<p style="margin:0">{sev_badge}&nbsp;&nbsp;'
             f'<span style="font-size:11pt;font-weight:600;color:{p["text"]}">{esc(f.title)}</span></p>'
             f'<p style="margin:4px 0 0 0;color:{p["muted"]};font-size:9pt">{esc(detail)}</p>'
             + field("Evidence", f.evidence) + field("Explanation", f.explanation)
@@ -183,5 +206,6 @@ def _render_screen(run: TestRun) -> str:
             f'{datetime.now():%d %b %Y, %H:%M}</p>'
             f'<p style="margin:0 0 12px 0">{chips or "No findings."}</p>'
             + card(scope)
-            + "".join(findings or [f'<p style="color:{p["muted"]}">No findings.</p>'])
+            + "".join(findings or [f'<p style="color:{p["muted"]}">'
+                                   f'{"No findings." if severities is None else "No findings in the selected severities."}</p>'])
             + "</div>")
