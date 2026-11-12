@@ -89,7 +89,7 @@ def _register_student(client: ApiClient, email: str, display_name: Optional[str]
     """Sign up as a student without an inbox, entering the code as a user would."""
     client.send_signup_code(email, university_id)
     _plant_code("signupVerifications", hashlib.sha256(email.encode()).hexdigest(), email)
-    return client.register(email, "pytest-password-1", display_name,
+    return client.register(email, "Pytest-password-1", display_name,
                            university_id=university_id, code=KNOWN_CODE, tos_accepted=True)
 
 
@@ -159,7 +159,7 @@ def test_register_then_read_profile(client: ApiClient):
 
 def test_student_cannot_register_without_a_code(client: ApiClient):
     with pytest.raises(ApiClientError) as exc:
-        client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1",
+        client.register(f"pytest-{_unique()}@example.ac.uk", "Pytest-password-1",
                         tos_accepted=True)
     assert exc.value.status == 400
     assert "Verify your university email" in exc.value.message
@@ -226,9 +226,9 @@ def test_registering_needs_an_email_from_the_chosen_university(client: ApiClient
 def test_student_who_changes_email_must_verify_again(client: ApiClient):
     _register_student(client, f"pytest-{_unique()}@example.ac.uk")
     new_email = f"pytest-{_unique()}@example.ac.uk"
-    client.change_email(new_email, "pytest-password-1")
+    client.change_email(new_email, "Pytest-password-1")
     # Firebase ends every session when an account's email changes, so sign in again.
-    account = client.login(new_email, "pytest-password-1")
+    account = client.login(new_email, "Pytest-password-1")
     assert account.needs_student_verification
     with pytest.raises(ApiClientError) as exc:
         client.upload_run(_sample_run(), authorised=True)
@@ -287,12 +287,12 @@ def test_student_is_blocked_from_team_features(signed_in: ApiClient):
 
 def test_team_member_can_compare_and_export(client: ApiClient):
     _, organisation = _register_team(client,
-        f"pytest-admin-{_unique()}@example.com", "pytest-password-1", "Pytest Team", tos_accepted=True)
+        f"pytest-admin-{_unique()}@example.com", "Pytest-password-1", "Pytest Team", tos_accepted=True)
     member_email = f"pytest-member-{_unique()}@example.com"
     invitation = client.invite_member(organisation["id"], member_email)
 
     member = ApiClient(BASE_URL)
-    account = member.register(member_email, "pytest-password-1",
+    account = member.register(member_email, "Pytest-password-1",
                               invitation_token=invitation["token"], tos_accepted=True)
     # Registering with an invitation joins the team in the same step.
     assert account.is_team
@@ -326,7 +326,7 @@ def test_delete_and_clear_history(signed_in: ApiClient):
 def test_admin_can_invite_and_manage_a_member(client: ApiClient):
     admin_email = f"pytest-admin-{_unique()}@example.com"
     account, organisation = _register_team(client,
-        admin_email, "pytest-password-1", "Pytest Security Team", "Owner", tos_accepted=True)
+        admin_email, "Pytest-password-1", "Pytest Security Team", "Owner", tos_accepted=True)
     assert account.is_admin
     org_id = organisation["id"]
 
@@ -335,7 +335,7 @@ def test_admin_can_invite_and_manage_a_member(client: ApiClient):
     assert invitation["token"], "the one-time token should be returned"
 
     member = ApiClient(BASE_URL)
-    member.register(member_email, "pytest-password-1", "Member",
+    member.register(member_email, "Pytest-password-1", "Member",
                     invitation_token=invitation["token"], tos_accepted=True)
 
     members = client.list_members(org_id)
@@ -351,14 +351,14 @@ def test_admin_cannot_see_member_findings(client: ApiClient):
     """The privacy line this project promises: an app's code stays on its own machine."""
     admin_email = f"pytest-admin-{_unique()}@example.com"
     _, organisation = _register_team(client,
-        admin_email, "pytest-password-1", "Pytest Team", tos_accepted=True)
+        admin_email, "Pytest-password-1", "Pytest Team", tos_accepted=True)
     org_id = organisation["id"]
 
     member_email = f"pytest-member-{_unique()}@example.com"
     invitation = client.invite_member(org_id, member_email)
 
     member = ApiClient(BASE_URL)
-    member_account = member.register(member_email, "pytest-password-1",
+    member_account = member.register(member_email, "Pytest-password-1",
                                      invitation_token=invitation["token"], tos_accepted=True)
     member.upload_run(_sample_run("com.member.private"), authorised=True)
 
@@ -369,14 +369,14 @@ def test_admin_cannot_see_member_findings(client: ApiClient):
 
 
 def test_solo_owner_can_upload_their_own_scan(client: ApiClient):
-    _register_team(client, f"pytest-solo-{_unique()}@example.com", "pytest-password-1",
+    _register_team(client, f"pytest-solo-{_unique()}@example.com", "Pytest-password-1",
                           "Pytest Solo", tos_accepted=True, solo=True)
     result = client.upload_run(_sample_run(), authorised=True)
     assert result["scan"]["findingCount"] == 2
 
 
 def test_team_admin_without_solo_cannot_upload(client: ApiClient):
-    _register_team(client, f"pytest-nosolo-{_unique()}@example.com", "pytest-password-1",
+    _register_team(client, f"pytest-nosolo-{_unique()}@example.com", "Pytest-password-1",
                           "Pytest Team Two", tos_accepted=True)
     with pytest.raises(ApiClientError) as exc:
         client.upload_run(_sample_run(), authorised=True)
@@ -400,13 +400,13 @@ def _set_subscription_status(owner_uid: str, status: str) -> None:
 
 def test_a_suspended_organisation_is_reported_to_its_members(client: ApiClient):
     admin, organisation = _register_team(client,
-        f"pytest-billing-{_unique()}@example.com", "pytest-password-1", "Pytest Billing",
+        f"pytest-billing-{_unique()}@example.com", "Pytest-password-1", "Pytest Billing",
         tos_accepted=True)
     org_id = organisation["id"]
     member_email = f"pytest-billed-{_unique()}@example.com"
     invitation = client.invite_member(org_id, member_email)
     member = ApiClient(BASE_URL)
-    member.register(member_email, "pytest-password-1",
+    member.register(member_email, "Pytest-password-1",
                     invitation_token=invitation["token"], tos_accepted=True)
 
     _set_subscription_status(admin.id, "active")
@@ -428,7 +428,7 @@ def test_a_suspended_organisation_is_reported_to_its_members(client: ApiClient):
 
 def test_register_requires_terms(client: ApiClient):
     with pytest.raises(ApiClientError) as exc:
-        client.register(f"pytest-{_unique()}@example.ac.uk", "pytest-password-1",
+        client.register(f"pytest-{_unique()}@example.ac.uk", "Pytest-password-1",
                         tos_accepted=False)
     assert exc.value.status == 400
     assert "Terms of Use" in str(exc.value)

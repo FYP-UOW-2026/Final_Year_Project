@@ -47,7 +47,9 @@ const {
   "../src/services/email.service.js"
 );
 const { UNIVERSITIES } = await import("../src/data/universities.js");
-const { domainReceivesMail } = await import("../src/services/studentVerification.service.js");
+const { domainReceivesMail, refusalMessage, statusFor, studentAccessEndsAt } = await import(
+  "../src/services/studentVerification.service.js"
+);
 const { verifyMailgunSignature } = await import("../src/routes/webhooks.routes.js");
 
 const app = createApp();
@@ -325,6 +327,58 @@ await check("a webhook signed with the signing key is accepted, and no other", (
   assert.equal(verifyMailgunSignature({ timestamp, token, signature: "abc" }, key), false);
   assert.equal(verifyMailgunSignature(undefined, key), false);
   assert.equal(verifyMailgunSignature({ timestamp, token, signature }, ""), false);
+});
+
+console.log("\nStudent access lasts three years from registering");
+
+const DAY = 24 * 60 * 60 * 1000;
+/** A verified student whose account was registered `daysAgo` days ago. */
+const studentRegistered = (daysAgo, extra = {}) => ({
+  email: "stu@example.ac.uk",
+  role: "member",
+  organisationId: null,
+  createdAt: new Date(Date.now() - daysAgo * DAY),
+  studentVerification: { status: "verified", email: "stu@example.ac.uk" },
+  ...extra,
+});
+const threeYearsAgo = new Date();
+threeYearsAgo.setUTCFullYear(threeYearsAgo.getUTCFullYear() - 3);
+const threeYearsInDays = (Date.now() - threeYearsAgo.getTime()) / DAY;
+
+await check("a student registered a day under three years ago is still verified", () => {
+  const status = statusFor(studentRegistered(threeYearsInDays - 1));
+  assert.equal(status.status, "verified");
+  assert.ok(status.accessEndsAt, "the end date should be given to the app");
+});
+
+await check("a student registered a day over three years ago has expired", () => {
+  assert.equal(statusFor(studentRegistered(threeYearsInDays + 1)).status, "expired");
+});
+
+await check("the end date is three years after registering, whatever happened since", () => {
+  const registered = new Date(Date.UTC(2026, 10, 12));
+  const ends = studentAccessEndsAt({ createdAt: registered });
+  assert.equal(ends.toISOString(), "2029-11-12T00:00:00.000Z");
+  // A Firestore timestamp as the API sends it gives the same answer.
+  const asJson = { _seconds: registered.getTime() / 1000, _nanoseconds: 0 };
+  assert.equal(studentAccessEndsAt({ createdAt: asJson }).toISOString(), ends.toISOString());
+});
+
+await check("team members are never cut off by it", () => {
+  const member = statusFor(studentRegistered(threeYearsInDays + 400, { organisationId: "org1" }));
+  assert.notEqual(member.status, "expired");
+  assert.equal(member.accessEndsAt, null);
+});
+
+await check("a record with no registration date is not locked out on a guess", () => {
+  assert.equal(statusFor(studentRegistered(0, { createdAt: undefined })).status, "verified");
+});
+
+await check("the refusal says when access ended and what to do instead", () => {
+  const message = refusalMessage(studentRegistered(threeYearsInDays + 1));
+  assert.match(message, /lasts 3 years from registering/);
+  assert.match(message, /ended on \d{1,2} [A-Z][a-z]+ \d{4}/);
+  assert.match(message, /join a team/);
 });
 
 console.log("\nMail domain check");

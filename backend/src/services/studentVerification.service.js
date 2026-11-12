@@ -27,7 +27,12 @@ import { Resolver } from "node:dns/promises";
 
 import { auth, db, FieldValue, Timestamp } from "../config/firebase.js";
 import { env } from "../config/env.js";
-import { COLLECTIONS, ROLES, STUDENT_STATUS } from "../constants/index.js";
+import {
+  COLLECTIONS,
+  ROLES,
+  STUDENT_ACCESS_YEARS,
+  STUDENT_STATUS,
+} from "../constants/index.js";
 import { findUniversity } from "../data/universities.js";
 import { ApiError } from "../utils/ApiError.js";
 import * as email from "./email.service.js";
@@ -162,30 +167,81 @@ export function isRequiredFor(profile) {
   return profile.role !== ROLES.ADMIN && !profile.organisationId;
 }
 
+/** A stored timestamp in milliseconds, whichever form it arrives in, or null. */
+function millisOf(value) {
+  if (!value) return null;
+  if (typeof value.toMillis === "function") return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  const seconds = value._seconds ?? value.seconds;
+  if (typeof seconds === "number") return seconds * 1000;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/**
+ * When a personal account's student access ends: STUDENT_ACCESS_YEARS after it was
+ * registered. Fixed from the day the account was made, so nothing the owner does later
+ * moves it. Null for a record with no registration date, which is left without a limit
+ * rather than locked out on a guess.
+ */
+export function studentAccessEndsAt(profile) {
+  const registered = millisOf(profile.createdAt);
+  if (registered === null) return null;
+  const ends = new Date(registered);
+  ends.setUTCFullYear(ends.getUTCFullYear() + STUDENT_ACCESS_YEARS);
+  return ends;
+}
+
+function studentAccessEnded(profile) {
+  const ends = studentAccessEndsAt(profile);
+  return Boolean(ends) && Date.now() >= ends.getTime();
+}
+
 /**
  * The verification state as the client sees it.
  *
  * Verification is tied to the address that was verified, so changing the account's
  * email afterwards makes it unverified again without anything having to remember to
- * reset it.
+ * reset it. Once student access has ended the status is "expired", whatever was
+ * verified, and stays so.
  */
 export function statusFor(profile) {
   const stored = profile.studentVerification ?? {};
   const verified = stored.status === STUDENT_STATUS.VERIFIED && stored.email === profile.email;
+  const required = isRequiredFor(profile);
+  const accessEndsAt = required ? studentAccessEndsAt(profile) : null;
 
   let status = STUDENT_STATUS.UNVERIFIED;
-  if (verified) status = STUDENT_STATUS.VERIFIED;
+  if (required && studentAccessEnded(profile)) status = STUDENT_STATUS.EXPIRED;
+  else if (verified) status = STUDENT_STATUS.VERIFIED;
   else if (stored.status === STUDENT_STATUS.PENDING && stored.email === profile.email) {
     status = STUDENT_STATUS.PENDING;
   }
 
   return {
     status,
-    required: isRequiredFor(profile),
+    required,
     eligible: isAcademicEmail(profile.email, stored.universityId),
     university: publicUniversity(stored.universityId),
     verifiedAt: verified ? (stored.verifiedAt ?? null) : null,
+    // So a client can say when student access ends, before it does.
+    accessEndsAt: accessEndsAt ? accessEndsAt.toISOString() : null,
   };
+}
+
+/** "12 November 2029", for messages. */
+function formatDay(date) {
+  return date.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric",
+    timeZone: "UTC" });
+}
+
+function accessEndedMessage(profile) {
+  return (
+    `Student access lasts ${STUDENT_ACCESS_YEARS} years from registering, and yours ended ` +
+    `on ${formatDay(studentAccessEndsAt(profile))}. To keep running assessments, join a ` +
+    "team with an invitation from its admin, or set up your own team (a solo team if you " +
+    "work alone). Your history is still here to view."
+  );
 }
 
 /** Whether the account may use the features gated behind student verification. */
@@ -195,6 +251,7 @@ export function isSatisfied(profile) {
 
 /** The message shown when an unverified student tries a gated feature. */
 export function refusalMessage(profile) {
+  if (statusFor(profile).status === STUDENT_STATUS.EXPIRED) return accessEndedMessage(profile);
   const university = findUniversity(profile.studentVerification?.universityId);
   if (university && !isAcademicEmail(profile.email, university.id)) {
     return (
@@ -234,6 +291,8 @@ export async function sendCode(profile) {
   if (!isRequiredFor(profile)) {
     throw ApiError.badRequest("This account does not need student verification.");
   }
+  // Ended for good: a code would verify an address but bring nothing back.
+  if (studentAccessEnded(profile)) throw ApiError.forbidden(accessEndedMessage(profile));
   const universityId = profile.studentVerification?.universityId ?? null;
   if (!isAcademicEmail(profile.email, universityId)) {
     throw ApiError.badRequest(
@@ -403,7 +462,12 @@ export async function recordBounce({ codeDoc, sendId, recipient, reason }) {
  */
 export async function sendCodeIfDue(profile) {
   const status = statusFor(profile);
-  if (!status.required || !status.eligible || status.status === STUDENT_STATUS.VERIFIED) {
+  if (
+    !status.required ||
+    !status.eligible ||
+    status.status === STUDENT_STATUS.VERIFIED ||
+    status.status === STUDENT_STATUS.EXPIRED
+  ) {
     return false;
   }
   try {

@@ -181,7 +181,7 @@ group("Registration and sign-in");
 
 // A university address, since personal accounts are for verified students.
 const userEmail = `dev-${unique()}@example.ac.uk`;
-const userPassword = "correct-horse-battery";
+const userPassword = "Correct-horse-battery-1";
 let userToken;
 let userUid;
 
@@ -885,7 +885,7 @@ await check("clearing the whole history removes every report export too", async 
 group("Organisations and admin");
 
 const adminEmail = `admin-${unique()}@example.com`;
-const adminPassword = "admin-password-1234";
+const adminPassword = "Admin-password-1234";
 let adminToken;
 let orgId;
 
@@ -1515,6 +1515,63 @@ await check("an organisation signed up in the app is locked until its first paym
   } finally {
     env.stripe.billNewOrganisations = false;
   }
+});
+
+group("Student access lasts three years from registering");
+
+await check("a new student's access ends three years from the day they registered", async () => {
+  const reg = await registerStudent({ email: `new-${unique()}@example.ac.uk`, password: "New-password-1" });
+  const ends = Date.parse(reg.body.user.studentVerification.accessEndsAt);
+  const inThreeYears = new Date();
+  inThreeYears.setUTCFullYear(inThreeYears.getUTCFullYear() + 3);
+  assert.ok(Math.abs(ends - inThreeYears.getTime()) < 24 * 60 * 60 * 1000, String(ends));
+});
+
+let veteranToken;
+const veteranPassword = "Veteran-password-1";
+
+await check("three years after registering, a student account has expired", async () => {
+  const reg = await registerStudent({ email: `veteran-${unique()}@example.ac.uk`, password: veteranPassword });
+  veteranToken = reg.body.session.idToken;
+  const registered = new Date();
+  registered.setUTCFullYear(registered.getUTCFullYear() - 3);
+  registered.setUTCDate(registered.getUTCDate() - 1);
+  await db.collection("users").doc(reg.body.user.id).update({ createdAt: Timestamp.fromDate(registered) });
+
+  const { status, body } = await call("GET", "/users/me", { token: veteranToken });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.user.studentVerification.status, "expired");
+});
+
+await check("an expired student cannot run assessments, and is told why", async () => {
+  const { status, body } = await call("POST", "/scans", { token: veteranToken, body: minimalScan });
+  assert.equal(status, 403);
+  assert.match(body.error.message, /ended on .*join a team/s);
+});
+
+await check("an expired student can still see their history", async () => {
+  const { status } = await call("GET", "/scans", { token: veteranToken });
+  assert.equal(status, 200);
+});
+
+await check("an expired student cannot renew by verifying again", async () => {
+  const { status, body } = await call("POST", "/users/me/student-verification/send", {
+    token: veteranToken,
+  });
+  assert.equal(status, 403, JSON.stringify(body));
+  assert.match(body.error.message, /lasts 3 years from registering/);
+});
+
+await check("changing email does not restart the three years", async () => {
+  const me = (await call("GET", "/users/me", { token: veteranToken })).body.user;
+  const newEmail = `moved-on-${unique()}@example.ac.uk`;
+  const moved = await call("POST", "/users/me/email", {
+    token: veteranToken,
+    body: { newEmail, currentPassword: veteranPassword },
+  });
+  assert.equal(moved.status, 200, JSON.stringify(moved.body));
+  assert.equal(moved.body.user.studentVerification.status, "expired");
+  assert.equal(moved.body.user.studentVerification.accessEndsAt, me.studentVerification.accessEndsAt);
 });
 
 group("Forgot password");

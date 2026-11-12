@@ -215,9 +215,15 @@ There are two kinds of account, and no paid plan:
 | History kept | Your 10 most recent runs | Everything |
 | Compare runs, save report from account | No | Yes |
 | AI explanations | 20 a month | Unlimited |
+| How long | 3 years from the day you registered | As long as you are on the team |
 
 A student account drops its oldest run as you add more; the app tells you when that
 happens. If you are removed from a team, your account becomes a student account again.
+
+Student access lasts **3 years from the day you registered**, and cannot be renewed:
+verifying again or changing your email does not move the date. After that you can still
+view and delete your history, but to keep scanning, join a team with an invitation, or
+set up your own team (tick *I work alone* if it is just you).
 
 Admin accounts oversee a team rather than running scans, so they do not see the Scan,
 Assess or History pages.

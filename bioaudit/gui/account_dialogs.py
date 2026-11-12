@@ -447,6 +447,21 @@ def show_student_verification_dialog(parent, client: ApiClient) -> DialogResult:
             self.setMinimumWidth(480)
             layout = QVBoxLayout(self)
 
+            if account and account.student_access_ended:
+                self.setWindowTitle("Student access has ended")
+                note = QLabel(
+                    "Student access lasts three years from registering, and yours ended on "
+                    f"<b>{account.student_access_ends_on}</b>. It cannot be renewed.<br><br>"
+                    "To keep running scans, join a team with an invitation from its admin, "
+                    "or set up your own team (tick <i>I work alone</i> if it is just you)."
+                    "<br><br>You can still view and delete your history.")
+                note.setWordWrap(True)
+                layout.addWidget(note)
+                buttons = QDialogButtonBox(QDialogButtonBox.Close)
+                buttons.rejected.connect(self.reject)
+                layout.addWidget(buttons)
+                return
+
             if not eligible:
                 what = f"a {university}" if university else "a university"
                 note = QLabel(

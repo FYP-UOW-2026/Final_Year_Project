@@ -43,7 +43,17 @@ export const STUDENT_STATUS = {
   UNVERIFIED: "unverified",
   PENDING: "pending",
   VERIFIED: "verified",
+  // Student access has run its course (STUDENT_ACCESS_YEARS from registering). Final:
+  // verifying again does not bring it back.
+  EXPIRED: "expired",
 };
+
+/**
+ * How long a personal (student) account keeps student access, counted from the day it
+ * was registered. It is not renewed, and neither re-verifying nor changing email moves
+ * the date. After it, the owner keeps their history but joins or sets up a team to scan.
+ */
+export const STUDENT_ACCESS_YEARS = 3;
 
 /** Bump when docs/TERMS.md changes materially; stored with each acceptance. */
 export const TOS_VERSION = "2026-10";

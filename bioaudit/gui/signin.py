@@ -653,6 +653,8 @@ def account_summary(account: Optional[Account]) -> str:
     parts.append("team" if account.is_team else "student")
     if account.is_admin:
         parts.append("admin")
-    if account.needs_student_verification:
+    if account.student_access_ended:
+        parts.append("student access ended")
+    elif account.needs_student_verification:
         parts.append("student email unverified")
     return "Signed in: " + " · ".join(parts)
