@@ -37,3 +37,6 @@ reflection_note/
 
 # Test case workbook
 BioAudit_Test_Cases_*.xlsx
+
+# Exported scan reports
+bioaudit-*.html
