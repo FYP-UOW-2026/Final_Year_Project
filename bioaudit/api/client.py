@@ -160,9 +160,9 @@ class Account:
     def student_verification(self) -> dict:
         """The server's view of this account's student status.
 
-        Keys: status ("unverified" / "pending" / "verified"), required (whether this
-        account needs it before it can scan), eligible (whether the email is at a
-        university domain).
+        Keys: status ("unverified" / "pending" / "verified" / "expired"), required
+        (whether this account needs it before it can scan), eligible (whether the email
+        is at a university domain), accessEndsAt (when student access ends, ISO 8601).
         """
         return self.raw.get("studentVerification") or {}
 
@@ -171,6 +171,23 @@ class Account:
         """True while a student account is locked out of scanning until verified."""
         sv = self.student_verification
         return bool(sv.get("required")) and sv.get("status") != "verified"
+
+    @property
+    def student_access_ended(self) -> bool:
+        """True once a student account's access has run out (three years from
+        registering). Final: verifying again does not bring it back."""
+        sv = self.student_verification
+        return bool(sv.get("required")) and sv.get("status") == "expired"
+
+    @property
+    def student_access_ends_on(self) -> Optional[str]:
+        """The day student access ends, as "12 November 2029", or None."""
+        ends = self.student_verification.get("accessEndsAt")
+        if not ends:
+            return None
+        from datetime import datetime
+        day = datetime.fromisoformat(ends.replace("Z", "+00:00"))
+        return f"{day.day} {day:%B %Y}"
 
 
 class ApiClient:

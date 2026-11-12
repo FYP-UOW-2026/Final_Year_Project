@@ -197,8 +197,17 @@ def cmd_whoami(args, cfg: Config) -> int:
     print(f"{account.email}  ·  {account.tier}"
           f"{'  ·  admin' if account.is_admin else ''}"
           f"{'  ·  org ' + account.organisation_id if account.organisation_id else ''}"
-          f"{'  ·  student email unverified' if account.needs_student_verification else ''}")
+          f"{_student_note(account)}")
     return 0
+
+
+def _student_note(account) -> str:
+    """The part of `whoami` about student access, if any."""
+    if account.student_access_ended:
+        return f"  ·  student access ended {account.student_access_ends_on}"
+    if account.needs_student_verification:
+        return "  ·  student email unverified"
+    return ""
 
 
 def cmd_verify_student(args, cfg: Config) -> int:
@@ -218,6 +227,13 @@ def cmd_verify_student(args, cfg: Config) -> int:
     account = client.account
     sv = account.student_verification
 
+    if account.student_access_ended:
+        print(f"Student access lasts three years from registering, and yours ended on "
+              f"{account.student_access_ends_on}, so it cannot be verified again. To keep "
+              "scanning, join a team with an invitation from its admin, or set up your own "
+              "team (`bioaudit register --organisation NAME --solo` if you work alone).",
+              file=sys.stderr)
+        return 1
     if not account.needs_student_verification:
         print("Your student email is already verified." if sv.get("status") == "verified"
               else "This account does not need student verification.")

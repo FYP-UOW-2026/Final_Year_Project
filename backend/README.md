@@ -231,6 +231,14 @@ The other way to get a personal account is an invitation: `POST /auth/register` 
 `{ email, password, displayName?, invitationToken }` creates the account and joins the team in one
 step, at any address, since the team sponsors it. A bad token creates nothing.
 
+**Student access lasts 3 years from registering** (`STUDENT_ACCESS_YEARS` in
+`src/constants/index.js`), counted from the account's `createdAt`. It is not renewable:
+after it the status is `expired`, scans and AI explanations are refused with a message
+saying when it ended, and no new code is sent, though history stays viewable. Neither
+re-verifying nor changing email moves the date, and team members are unaffected. The
+end date is sent to clients as `studentVerification.accessEndsAt`. A record with no
+`createdAt` has no limit rather than being locked out on a guess.
+
 Changing a student's email lapses the verification. Until the new address is verified (a code is
 emailed to it straight away; `/users/me/student-verification/*` re-sends and checks it), the account
 cannot save a scan or request an AI explanation, though viewing and deleting existing history stays
