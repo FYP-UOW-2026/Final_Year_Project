@@ -2260,7 +2260,7 @@ def run(cfg: Config | None = None) -> int:
             moment the run finished, before any explanation exists — so once the server
             has them, they are copied back into that same run and both views are
             refreshed. Without this, the explanations would only ever be visible through
-            the server-backed "Save report from account" (team-only) option.
+            the server-backed "Save report from account" option.
             """
             checkbox = (ctx or {}).get("use_ai_checkbox")
             if checkbox is None or not checkbox.isChecked():

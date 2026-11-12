@@ -10,7 +10,7 @@ device still needs the `adb` binary (it is an external CLI, not a Python package
 so it cannot be frozen in).
 
 AI explanation does not ship in this exe at all: it runs entirely on the backend
-(the Gemini SDK lives only in backend/, a Node package), called over HTTPS through
+(the AI call lives only in backend/, a Node package), called over HTTPS through
 ApiClient.explain_finding. There used to be a second, local AI path bundled in here
 too (google-genai + a knowledge-base file), removed because it only worked on
 whichever PC happened to have its own GEMINI_API_KEY set.
@@ -82,13 +82,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # `streamlit` itself is excluded because `dashboard` shells out to it as a separate
-    # process (subprocess.call(["streamlit", ...])) rather than importing it in-process
-    # — but PyInstaller still followed its *dependencies* into the build even with the
-    # package itself excluded, since something in the graph re-imports them. pandas and
-    # pyarrow are only ever needed by streamlit (confirmed via `pip show`, "Required-by:
-    # streamlit"); nothing in bioaudit/ imports either. scipy has no "Required-by" at
-    # all — dead weight, probably left over from an earlier version of the codebase.
+    # streamlit, pandas, pyarrow and scipy are never imported by bioaudit/. The old
+    # Streamlit dashboard has been removed, but a build machine may still have them
+    # installed from it, and PyInstaller would otherwise follow them into the exe.
     # QtQml/QtQuick/QtPdf are never imported either (only QtCore/QtGui/QtWidgets are) —
     # confirmed by grepping every `from PySide6.*` import in the source tree.
     excludes=[

@@ -10,8 +10,7 @@ pyyaml>=6.0              # config
 # keeps a second launch from opening another window.
 PySide6>=6.6             # native desktop app: python -m bioaudit gui
 
-# Dashboard + reporting
-streamlit>=1.40          # dashboard UI
+# Reporting
 weasyprint>=63           # HTML -> PDF export (HTML reports are written without it)
 
 # Testing

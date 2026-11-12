@@ -39,7 +39,7 @@ async function enforceRetention(userId, tier) {
   const snap = await scans().where("userId", "==", userId).orderBy("createdAt", "desc").get();
   if (snap.size <= limit) return { removed: 0 };
 
-  // Chunked, since an account just downgraded from premium can be hundreds of scans over
+  // Chunked, since a member just removed from an organisation can be hundreds of scans over
   // the limit and a single batch is capped at 500 writes. Each chunk also takes its own
   // scans off scanCount, so the counter stays true even if a later chunk fails.
   const excess = snap.docs.slice(limit);
@@ -214,7 +214,7 @@ export async function saveFindingExplanation(scanId, user, findingIndex, payload
   return saved;
 }
 
-/** Record a report export (HTML/PDF) against its scan. */
+/** Record a report export (HTML) against its scan. */
 export async function saveReportExport(scanId, user, payload = {}) {
   const scan = await getScanForCaller(scanId, user);
   if (scan.userId !== user.uid) {

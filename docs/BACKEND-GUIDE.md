@@ -314,10 +314,6 @@ pytest tests/test_api_client.py -v
 Point that at the **emulator**, not production. It registers a lot of accounts and will hit
 the sign-in rate limit (20 per 15 minutes per IP) and lock you out for a while.
 
-`node tests/aiGraph.groq.test.mjs` checks the Groq message format and the rate-limit retry
-offline. Avoid `node tests/aiGraph.test.mjs` with a real `GROQ_API_KEY` in `.env`: it
-reads that file and makes live calls.
-
 ---
 
 ## 8. Configuration and deployment
@@ -420,9 +416,8 @@ console for current numbers, they do change).
 The explain routes call `groq.service.js`: **one request per finding**, with the finding
 and its guidance in the prompt and Groq's JSON mode on, about 1,000 tokens each. A 429
 asking to wait 20 seconds or less is waited out and retried; a longer wait means the daily
-limit is spent, and fails at once. `aiGraph.service.js`, a LangGraph version with tool
-calls and several providers, is not currently called: its several requests per finding
-exceed the free token limit (see backend/README.md).
+limit is spent, and fails at once. An earlier LangGraph version with tool calls and several
+providers was removed: its several requests per finding exceeded the free token limit.
 
 The key belongs **only** on the server. The Python client has no AI dependency at all — a
 local explainer existed once and was removed precisely because it only worked on whichever

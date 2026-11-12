@@ -1,7 +1,7 @@
 # BioAudit — Editing the Front End
 
-The front end is Python: a PySide6 (Qt 6) desktop app, a CLI, and a small Streamlit
-dashboard, all driving the same scanning engine. This guide covers where things live, the
+The front end is Python: a PySide6 (Qt 6) desktop app and a CLI, both driving the same
+scanning engine. This guide covers where things live, the
 patterns you have to follow, and how to test a change without shipping a broken exe.
 
 For the server, see [BACKEND-GUIDE.md](BACKEND-GUIDE.md). For using the app, see
@@ -40,7 +40,7 @@ bioaudit/
   core.py             orchestration: build a TestRun, rank it. No UI, no network.
   models.py           Finding / Severity / TestRun — the shared vocabulary
   config.py           defaults + config.yaml loading
-  session.py          the saved-session file (shared by GUI, CLI, dashboard)
+  session.py          the saved-session file (shared by GUI and CLI)
   adb.py              wrapper around the adb CLI; resolve_adb() finds the binary
   platform_tools.py   downloads Google's platform-tools on request (Download ADB)
 
@@ -60,7 +60,6 @@ bioaudit/
   analysis/           error_oracle, lockout, statistics
   engine/             severity.py, recommendations.py — ranking and fallback fixes
   report/generator.py HTML + PDF output
-  dashboard/app.py    Streamlit view of account history
 ```
 
 ### Two rules worth knowing before you touch anything
@@ -345,8 +344,8 @@ at runtime on someone else's machine.
 
 `excludes` in the spec drops `pandas`, `pyarrow`, `scipy`, and unused Qt modules
 (`QtQml`, `QtQuick`, `QtPdf`) — together about 68 MB. None are imported by this codebase;
-they arrived as transitive dependencies of `streamlit`, which the `dashboard` command runs
-as a **separate process** rather than importing, so it never needed bundling.
+the Python packages came in with the old Streamlit dashboard (since removed) and may still
+be installed on a build machine, where PyInstaller would otherwise bundle them.
 
 If you add a real dependency on any of those, remove it from `excludes` or the exe will
 break in a way source runs will not. Check what you actually shipped:

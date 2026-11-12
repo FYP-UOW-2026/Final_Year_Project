@@ -1,10 +1,10 @@
 /**
- * Report export. Team accounts only.
+ * Report export. Open to every signed-in account, for its own scans.
  *
  * The API returns HTML rather than PDF. Producing a PDF needs a headless browser or a
  * rendering engine, which would add a large dependency to every deployment of this
- * service. The desktop app already has a renderer, so it converts this HTML locally,
- * and the HTML itself is a perfectly good deliverable to share or print on its own.
+ * service. The desktop app saves this HTML as it is, and the HTML is a perfectly good
+ * deliverable to share or print on its own.
  */
 import { SEVERITIES } from "../constants/index.js";
 

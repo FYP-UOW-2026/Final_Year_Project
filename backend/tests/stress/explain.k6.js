@@ -1,7 +1,7 @@
 /**
  * k6 stress test for POST /api/scans/:scanId/findings/:findingIndex/explain -- the AI
- * explanation endpoint, the one call in this codebase that goes through aiGraph.service.js
- * (model router, circuit breaker, repair loop).
+ * explanation endpoint, the one call in this codebase that reaches the AI provider
+ * (groq.service.js: one request per finding, with a short wait-and-retry on rate limits).
  *
  * Needs real auth + real data: the endpoint requires a signed-in Firebase ID token and an
  * existing scan owned by that account. Get a token via `python -m bioaudit login` then

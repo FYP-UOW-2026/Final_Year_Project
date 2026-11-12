@@ -320,9 +320,6 @@ dedicated account (a verified student or team member, or a solo team owner) and 
 command signs in from it. The token is never written to disk. Keep it in the CI secret
 store. Changing that account's password or team revokes it.
 
-There is also `BioAudit.exe dashboard`, a browser view of your account's history (needs
-`streamlit` installed and a `login` first).
-
 ---
 
 ## 10. When something goes wrong

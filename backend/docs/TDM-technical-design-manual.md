@@ -7,7 +7,7 @@ Purpose: describe BioAudit's system design through Functional Hierarchy Diagram,
 ## 2. System Architecture Overview
 
 Two independent codebases:
-- **`bioaudit/`** (Python) — CLI, PySide6 GUI, Streamlit dashboard, scanning engine. Runs on tester's machine. Talks to Android device over ADB or reads APK file directly. Detection logic lives entirely here, deterministic, rule-based.
+- **`bioaudit/`** (Python) — CLI, PySide6 GUI, scanning engine. Runs on tester's machine. Talks to Android device over ADB or reads APK file directly. Detection logic lives entirely here, deterministic, rule-based.
 - **`backend/`** (Node/Express) — REST API. No scanning logic. Owns accounts, account type (student or team), scan history, org oversight, the organisation subscription, AI explanation proxy. Deployed Cloud Run.
 
 External dependents: **Firebase Authentication** (credentials, sessions, custom claims for role/organisationId), **Cloud Firestore** (scan history, org data, invitations, flags, audit log), **Groq API** (explanation generation only, never detection), **Stripe** (the organisation's yearly subscription, through the "Run Payments with Stripe" Firebase extension), **Mailgun** (sign-up and password reset codes), **ADB/target Android device** (runtime probing, black-box, no root).

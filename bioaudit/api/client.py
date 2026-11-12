@@ -556,10 +556,10 @@ class ApiClient:
         )["comparison"]
 
     def export_report(self, scan_id: str) -> str:
-        """Team accounts. Return the report as HTML.
+        """Any signed-in account, for its own scans. Return the report as HTML.
 
-        The server sends HTML rather than PDF so it needs no rendering engine. Pass the
-        result to report/generator.py if a PDF is wanted, since this app already has one.
+        The server sends HTML rather than PDF so it needs no rendering engine; the app
+        saves the HTML as it is.
         """
         return self._request("GET", f"/scans/{scan_id}/report",
                             expect_json=False)

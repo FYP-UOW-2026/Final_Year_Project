@@ -63,7 +63,6 @@ Two suites, neither of which touches a live Firebase project.
 ```bash
 npm test                 # 30 offline checks, no emulator needed
 npm run test:integration # 101 checks against the Firebase emulators
-node tests/aiGraph.groq.test.mjs   # Groq message format and rate-limit retry, offline
 ```
 
 **`npm test`** boots the real Express app and exercises the health check, the 404 handler,
@@ -277,7 +276,7 @@ against the Firebase emulators, so tests never send real mail.
 | GET | `/scans/:scanId` | One scan with all findings |
 | POST | `/scans/:scanId/findings/:index/explain` | Student and Team: View AI explanation |
 | GET | `/scans/compare/results` | Team: Compare scan results |
-| GET | `/scans/:scanId/report` | Team: Export scan report |
+| GET | `/scans/:scanId/report` | Student and Team: Export scan report (HTML, own scans) |
 | DELETE | `/scans/:scanId` | User: Delete test history (one) |
 | DELETE | `/scans` | User: Delete test history (all) |
 
@@ -439,7 +438,6 @@ backend/
       email.service.js          Mailgun or SMTP, best-effort
       knowledgeBase.js          reviewed guidance per finding category, for the AI
       groq.service.js           AI explanations, with redaction (the live path)
-      aiGraph.service.js        LangGraph multi-provider version, not currently called (see below)
       report.service.js         HTML report rendering
       audit.service.js          append-only record of admin actions
     utils/
@@ -448,44 +446,6 @@ backend/
       asyncHandler.js      forwards async errors to the error handler
   firestore.rules          deny-by-default database rules
 ```
-
-## AI orchestration (LangGraph)
-
-`src/services/aiGraph.service.js` is a LangGraph rebuild of the explanation layer. It is not
-currently called: `scans.routes.js` and `reports.routes.js` use the single-request
-`groq.service.js`, because the graph's several requests per finding exceed Groq's free limit
-of 8,000 tokens a minute. (`gemini.service.js` has been removed.) It routes each
-call through `aiModelRouter.js`'s fallback chain (Gemini, then Groq, then any configured
-Ollama models, then OpenAI once enabled), trying the next provider when one fails outright.
-
-What it adds over a single-shot call: tool calls instead of one fixed prompt (the model
-asks for a finding's evidence, a scan's summary, guidance for a category, or a diff between
-two scans, rather than having everything handed to it up front), a JSON reply shape stated
-in each mode's prompt and checked with zod, and a repair turn for a malformed reply instead
-of a hard failure.
-
-```js
-import { createSession } from "./services/aiGraph.service.js";
-
-const session = createSession({
-  user: req.user,        // bound from the request, never model-supplied
-  scanIds: [scan.id],    // allowlist: a tool call naming any other scan is refused
-});
-
-const { result } = await session.explain(`Explain finding ${index} in scan ${scan.id}.`);
-// result: { explanation, mitigation, references } -- same shape the old single-shot services returned
-```
-
-Four modes: `explain` (one finding, matches today's endpoint), `synthesize` (a whole scan),
-`compare` (the diff between two scans, narrated), `report` (feeds a future export path).
-
-Every tool's return value passes through one egress guard before it can reach the AI provider:
-redacted, capped (800 characters for evidence, 200 for labels), stripped to an explicit
-allowlist of keys. `compare_scans` drops evidence from both scans entirely — a diff needs
-categories, not two scans' worth of provider rows. This matters because a tool call's return
-is appended to the conversation and sent back to the provider on the next turn regardless of which
-tool ran first, so the guard has to sit on every tool's output, not just the first one
-called.
 
 ## Connecting the desktop app
 

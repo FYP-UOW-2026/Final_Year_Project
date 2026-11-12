@@ -2,7 +2,7 @@
 
 Pipeline: severity adjustment -> deterministic fallback mitigation -> ranking. AI
 explanation is no longer done here or anywhere on the client: it runs entirely on the
-backend (see `backend/src/services/gemini.service.js`), called through
+backend (see `backend/src/services/groq.service.js`), called through
 `ApiClient.explain_finding` once a run is saved to an account. A local explainer used
 to exist alongside it, reading a `GEMINI_API_KEY` from the machine's own environment,
 but that meant a checkbox that worked only on whichever PC happened to have that

@@ -17,7 +17,7 @@ export const COLLECTIONS = {
 /**
  * Which features a signed-in user may reach. There is no paid plan: an account on a
  * team (admin or member) has everything, and a personal student account keeps the
- * limited history, no compare or export, and a monthly cap on AI explanations.
+ * limited history, no compare, and a monthly cap on AI explanations.
  */
 export const TIERS = {
   STUDENT: "student",

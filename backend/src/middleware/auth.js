@@ -105,7 +105,7 @@ async function refuseSuspendedOrganisation(req) {
   }
 }
 
-/** Gate for team-only features: Compare scan results, Export scan report. */
+/** Gate for the team-only feature: Compare scan results. */
 export const requireTeam = asyncHandler(async (req, res, next) => {
   if (req.user.tier !== TIERS.TEAM) {
     throw ApiError.forbidden(

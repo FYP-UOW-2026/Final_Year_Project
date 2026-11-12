@@ -13,7 +13,6 @@ Commands:
   init-ci [--apk PATH]                    write a GitHub Actions workflow that scans the APK
   assess  --package P --i-am-authorized   full black-box assessment on a device
   explain <scan-id>                       ask the server to explain a saved run's findings
-  dashboard                               launch the Streamlit UI
   gui                                     launch the PySide6 desktop app
 
 `scan-apk` and `assess` need a signed-in session (`bioaudit login` first): BioAudit keeps
@@ -429,13 +428,6 @@ def cmd_explain(args, cfg: Config) -> int:
     return 1 if failures else 0
 
 
-def cmd_dashboard(args, cfg: Config) -> int:
-    import subprocess
-    from pathlib import Path
-    app = Path(__file__).parent / "dashboard" / "app.py"
-    return subprocess.call(["streamlit", "run", str(app)])
-
-
 def cmd_gui(args, cfg: Config) -> int:
     from .gui.app import run as run_gui
     return run_gui(cfg)
@@ -609,9 +601,6 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("explain", help="ask the server to explain a saved run's findings")
     e.add_argument("scan_id")
     e.set_defaults(func=cmd_explain)
-
-    d = sub.add_parser("dashboard", help="launch the Streamlit dashboard")
-    d.set_defaults(func=cmd_dashboard)
 
     g = sub.add_parser("gui", help="launch the PySide6 desktop app")
     g.set_defaults(func=cmd_gui)

@@ -267,8 +267,8 @@ router.get(
 /**
  * GET /api/scans/:scanId/report -- Export scan report (any signed-in account, own scans)
  *
- * Returns HTML. The desktop app converts it to PDF locally, which avoids shipping a
- * rendering engine with this service.
+ * Returns HTML, and the desktop app saves it as it is. Producing HTML rather than PDF
+ * keeps a rendering engine out of this service.
  */
 router.get(
   "/:scanId/report",

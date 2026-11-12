@@ -4,7 +4,7 @@
  * Diagram coverage (User):
  *   View profile, Update account details, Change email address,
  *   Change password, Delete account
- * Free User: Verify student email
+ * Student account: Verify student email
  */
 import { Router } from "express";
 import rateLimit from "express-rate-limit";

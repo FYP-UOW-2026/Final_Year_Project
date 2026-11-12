@@ -47,7 +47,6 @@ a **standalone Windows `.exe`** — all driving the same detection engine.
 | Severity ranking + recommendation engine | `engine/` | — |
 | Desktop GUI (scan / assess / history / accounts) | `gui/` | — |
 | Backend: accounts, history, team oversight (required — see below) | `backend/`, `api/` | — |
-| Dashboard: browse an account's history | `dashboard/` | — |
 | HTML/PDF report export | `report/` | — |
 
 **Detection is deterministic.** The AI layer never decides whether a vulnerability
@@ -97,9 +96,6 @@ python -m bioaudit explain <scan-id>
 
 # Launch the desktop app (scan / assess / browse history in one window)
 python -m bioaudit gui
-
-# Launch the Streamlit dashboard (reads whichever account you last logged in as)
-python -m bioaudit dashboard
 ```
 
 The `--i-am-authorized` flag is a required authorization gate for any runtime
@@ -178,8 +174,6 @@ Then sign in:
 - **CLI**: `python -m bioaudit login` (or `register`). `scan-apk` and `assess` refuse to
   run without a session. `python -m bioaudit whoami` shows who is currently signed in;
   `logout` ends the session.
-- **Dashboard**: reads whichever account the CLI last signed in as; run `bioaudit login`
-  first if it says nobody is signed in.
 
 There are two kinds of account and no paid personal plan. A **student** account is free,
 needs a verified university email, keeps the newest 10 runs and gets 20 AI explanations a
@@ -227,7 +221,7 @@ bioaudit/
   adb.py            ADB wrapper (no root)
   platform_tools.py downloads Google's platform-tools on request, so adb needs no setup
   api/              client for the backend (standard library only)
-  session.py        saved-session file, shared by the CLI, GUI, and dashboard
+  session.py        saved-session file, shared by the CLI and GUI
   static_analysis/  APK + manifest inspection (androguard)
   runtime/          IPC oracle, response oracle (side channel), scenarios, observers
   analysis/         error-oracle, lockout, statistics (robust-z outliers)
@@ -235,7 +229,6 @@ bioaudit/
   report/           HTML/PDF export
   gui/              PySide6 desktop app (app.py; signin.py and register_form.py — sign-in
                     and welcome gate; team.py — Team tab; account_dialogs.py)
-  dashboard/        Streamlit UI
 launcher.py         frozen-exe entry point (GUI by default, CLI with args)
 BioAudit.spec   PyInstaller build spec
 backend/            Express + Firestore API (accounts, history, teams, AI explanation) — required
