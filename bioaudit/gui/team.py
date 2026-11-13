@@ -883,15 +883,17 @@ def make_team_tab(parent_window, palette: dict):
                 "unpaid": f"<b style='color:{SEVERITY_COLOURS['high']}'>Payment needed.</b> "
                           f"Your organisation's yearly subscription has not been paid yet. "
                           f"Pay for it to start using BioAudit and invite your team.",
-                "none": "<b>No subscription on record.</b> This organisation was not set up "
-                        "through the website's checkout, so it is not billed.",
+                "none": "<b>No subscription on record.</b> This organisation was set up "
+                        "before billing, so it is not billed. You can start a yearly "
+                        "subscription for it here.",
             }.get(state, f"Subscription state: {state}")
             self.sub_status.setText(text)
             self.sub_cancel_btn.setVisible(state == "active")
             self.sub_resume_btn.setVisible(state == "cancelling")
-            self.sub_renew_btn.setText("Pay for subscription…" if state == "unpaid"
-                                       else "Renew subscription…")
-            self.sub_renew_btn.setVisible(state in ("ended", "unpaid"))
+            self.sub_renew_btn.setText({"unpaid": "Pay for subscription…",
+                                        "none": "Start subscription…"}.get(
+                                           state, "Renew subscription…"))
+            self.sub_renew_btn.setVisible(state in ("ended", "unpaid", "none"))
             self.sub_portal_btn.setVisible(state not in ("none", "unpaid"))
 
         def _cancel_subscription(self) -> None:
