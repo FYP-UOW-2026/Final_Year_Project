@@ -183,6 +183,7 @@ def run(cfg: Config | None = None) -> int:
     )
 
     from . import history_view, team, theme
+    from .confirm_dialog import confirm_by_typing
 
     # --- small layout helpers, shared by every tab --------------------------
     # Grouping controls into titled cards is what turns a flat stack of widgets into
@@ -1110,11 +1111,7 @@ def run(cfg: Config | None = None) -> int:
             self._last_scan_id = sync_result.get("scan_id")
             self._update_save_report_buttons()
 
-            html = _sync_banner_html(sync_result) + generator.render_html(ctx["run"], dark=True)
-            ctx["results_view"].setHtml(html)
-            if retry_btn is not None:
-                retry_btn.setEnabled(True)
-                retry_btn.setVisible(bool(sync_result.get("error")))
+            self._render_run(ctx)   # also rebuilds the severity buttons and the retry button
 
             self.statusBar().showMessage(
                 "Saved to your account." if sync_result.get("scan_id")
@@ -1322,9 +1319,7 @@ def run(cfg: Config | None = None) -> int:
             layout.addWidget(self.scan_progress)
 
             # --- results ----------------------------------------------
-            self.scan_summary = QLabel("")
-            self.scan_summary.setTextFormat(Qt.RichText)
-            self.scan_summary.hide()
+            self.scan_summary = self._make_summary_bar()
             layout.addWidget(self.scan_summary)
 
             self.scan_results = QTextBrowser()
@@ -1535,9 +1530,7 @@ def run(cfg: Config | None = None) -> int:
             layout.addWidget(self.assess_progress)
 
             # --- results ----------------------------------------------
-            self.assess_summary = QLabel("")
-            self.assess_summary.setTextFormat(Qt.RichText)
-            self.assess_summary.hide()
+            self.assess_summary = self._make_summary_bar()
             layout.addWidget(self.assess_summary)
 
             self.assess_results = QTextBrowser()
@@ -1749,7 +1742,8 @@ def run(cfg: Config | None = None) -> int:
         def _build_history_tab(self) -> QWidget:
             self._history_page = history_view.make_history_page(
                 self.palette_colours, on_open=self._open_history_scan,
-                on_refresh=self._reload_history, on_clear=self._clear_history)
+                on_refresh=self._reload_history, on_clear=self._clear_history,
+                on_delete_selected=self._delete_history_runs)
 
             report = QWidget()
             layout = QVBoxLayout(report)
@@ -1918,12 +1912,13 @@ def run(cfg: Config | None = None) -> int:
                 QMessageBox.information(self, "Nothing to clear", "There is no history yet.")
                 return
 
-            if QMessageBox.question(
+            if not confirm_by_typing(
                 self, "Clear history",
                 f"Permanently delete all {len(self._history_ids)} run(s) saved to your "
                 "account?\n\nThis cannot be undone. Exported report files on this "
                 "computer are not affected.",
-            ) != QMessageBox.Yes:
+                len(self._history_ids),
+            ):
                 return
 
             try:
@@ -1933,6 +1928,40 @@ def run(cfg: Config | None = None) -> int:
                 return
 
             self.statusBar().showMessage(f"Cleared {removed} run(s) from your account.")
+            self._history_page.clear_selection()
+            self._reload_history()
+
+        def _delete_history_runs(self, ids: list) -> None:
+            """Delete the runs ticked on the History page, after a typed-code confirm."""
+            if self.api is None or not ids:
+                return
+            if not confirm_by_typing(
+                self, "Delete selected runs",
+                f"Permanently delete {len(ids)} selected run(s) from your account?\n\n"
+                "This cannot be undone. Exported report files on this computer are "
+                "not affected.",
+                len(ids),
+            ):
+                return
+
+            failed = []
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                for scan_id in ids:
+                    try:
+                        self.api.delete_scan(scan_id)
+                    except Exception as exc:  # noqa: BLE001
+                        failed.append(str(exc))
+            finally:
+                QApplication.restoreOverrideCursor()
+
+            done = len(ids) - len(failed)
+            msg = f"Deleted {done} of {len(ids)} run(s)."
+            if failed:
+                msg += f" {len(failed)} failed."
+                QMessageBox.warning(self, "Some runs were not deleted", f"{msg}\n\n{failed[0]}")
+            self.statusBar().showMessage(msg)
+            self._history_page.clear_selection()
             self._reload_history()
 
         def _compare_runs(self) -> None:
@@ -2145,24 +2174,67 @@ def run(cfg: Config | None = None) -> int:
             # Prepend the sync outcome so a failed upload is visible without hiding the
             # findings, which are the point of the run.
             html = _sync_banner_html(sync) + generator.render_html(run_, dark=True)
+            ctx["banner"] = _sync_banner_html(sync)
             if ctx.get("retry_btn") is not None:
                 ctx["retry_btn"].setVisible(bool(sync.get("error")))
                 ctx["retry_btn"].setEnabled(True)
 
             ctx["results_view"].setHtml(html)
             ctx["open_btn"].setEnabled(True)
-            counts = run_.counts()
+            self._build_severity_bar(ctx)
 
-            # Coloured count badges above the report, so the shape of the result is
-            # readable at a glance before anyone starts reading findings.
-            summary_label = ctx.get("summary")
-            if summary_label is not None:
-                summary_label.setText(
-                    f"<span style='color:{self.palette_colours['muted']}'>"
-                    f"{_escape(run_.package)}</span>&nbsp;&nbsp;&nbsp;"
-                    + theme.severity_chips_html(counts, self.palette_colours)
-                )
-                summary_label.show()
+        def _make_summary_bar(self):
+            """Package name plus a row of severity jump buttons (filled per run)."""
+            bar = QWidget()
+            row = QHBoxLayout(bar)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(8)
+            bar.package_label = QLabel("")
+            bar.package_label.setTextFormat(Qt.RichText)
+            row.addWidget(bar.package_label)
+            bar.buttons_box = QHBoxLayout()
+            bar.buttons_box.setSpacing(6)
+            row.addLayout(bar.buttons_box)
+            row.addStretch(1)
+            bar.hide()
+            return bar
+
+        def _build_severity_bar(self, ctx) -> None:
+            """One button per severity that actually has findings.
+
+            Clicking one scrolls the report to the first finding of that severity. It
+            never filters: the report always shows everything.
+            """
+            bar = ctx.get("summary")
+            if bar is None:
+                return
+            run_ = ctx["run"]
+            box = bar.buttons_box
+            while box.count():
+                item = box.takeAt(0)
+                if item.widget() is not None:
+                    item.widget().deleteLater()
+            bar.package_label.setText(
+                f"<span style='color:{self.palette_colours['muted']}'>"
+                f"{_escape(run_.package)}</span>")
+
+            present = [(label, n) for label, n in reversed(list(run_.counts().items())) if n]
+            if not present:
+                bar.package_label.setText(
+                    bar.package_label.text()
+                    + f"&nbsp;&nbsp;<span style='color:{self.palette_colours['muted']}'>"
+                    "No findings. That is not proof the app is safe, only that these "
+                    "checks found nothing.</span>")
+            for label, n in present:
+                b = QPushButton(f"{n} {label}")
+                b.setCursor(Qt.PointingHandCursor)
+                b.setProperty("sev", label.lower())
+                b.setToolTip(f"Jump to the first {label} finding")
+                b.clicked.connect(
+                    lambda _checked=False, a=generator.severity_anchor(label):
+                    ctx["results_view"].scrollToAnchor(a))
+                box.addWidget(b)
+            bar.show()
 
         def _explain_would_start(self, ctx) -> bool:
             """Whether _maybe_auto_explain would actually kick off a job for this ctx.

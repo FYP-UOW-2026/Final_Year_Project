@@ -50,6 +50,8 @@ bioaudit/
     signin.py         welcome gate + switch-account dialogs, sized to fit the screen
     register_form.py  the Create account form (student and team)
     team.py           the Team tab (admin tools, including Subscription)
+    confirm_dialog.py type-to-confirm dialog for deleting history (make_code, matches are pure)
+    history_view.py   History tab: row checkboxes, bulk bar, paging (selection helpers are pure)
     account_dialogs.py  profile / password / delete-account / join-org dialogs
     formatting.py     dates and severity summaries shared by the tabs
 
@@ -195,7 +197,6 @@ Useful helpers:
 | Function | For |
 |---|---|
 | `apply_theme(app)` | called once at startup, returns the palette |
-| `severity_chips_html(counts, palette)` | the coloured count badges |
 | `empty_state_html(title, lines, palette)` | "nothing here yet" panels |
 
 For layout, use the local helpers in `run()`: `_section("Title")` for a titled card,

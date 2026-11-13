@@ -169,8 +169,25 @@ def _refresh_icon(colour: str, size: int):
     return QIcon(px)
 
 
+def toggle_selection(selected: set, scan_id: str, on: bool) -> set:
+    """New selection set with scan_id added (on) or removed (off)."""
+    out = set(selected)
+    if on:
+        out.add(scan_id)
+    else:
+        out.discard(scan_id)
+    return out
+
+
+def prune_selection(selected: set, scans: list) -> set:
+    """Drop ids that no longer exist (after a reload or delete)."""
+    live = {s.get("id") for s in scans}
+    return {i for i in selected if i in live}
+
+
 def make_history_page(palette: dict, on_open: Callable[[str], None],
-                      on_refresh: Callable[[], None], on_clear: Callable[[], None]):
+                      on_refresh: Callable[[], None], on_clear: Callable[[], None],
+                      on_delete_selected: Callable[[list], None] = lambda ids: None):
     """Build the list page. Returns a QWidget with these extra members:
 
     stack            QStackedWidget: index 0 the table, index 1 a report widget
@@ -181,7 +198,8 @@ def make_history_page(palette: dict, on_open: Callable[[str], None],
     from PySide6.QtCore import QSize, Qt
     from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                    QPushButton, QStackedWidget, QTableWidget,
-                                   QAbstractItemView, QVBoxLayout, QWidget, QFrame)
+                                   QAbstractItemView, QVBoxLayout, QWidget, QFrame,
+                                   QCheckBox)
 
     from . import theme
 
@@ -195,6 +213,7 @@ def make_history_page(palette: dict, on_open: Callable[[str], None],
             self._sort_key, self._sort_desc = "date", True
             self._page = 0
             self._opening_id = None
+            self._selected: set = set()
 
             outer = QVBoxLayout(self)
             outer.setContentsMargins(0, 0, 0, 0)
@@ -239,9 +258,35 @@ def make_history_page(palette: dict, on_open: Callable[[str], None],
             bar.addWidget(refresh)
             lay.addLayout(bar)
 
-            self.table = QTableWidget(0, 5)
+            # Selection bar: select-all (current page) on the left, bulk actions once
+            # at least one row is ticked.
+            sel = QHBoxLayout()
+            sel.setSpacing(8)
+            self.select_all = QCheckBox("Select all")
+            # 1.2x the normal checkbox: label font and the box itself.
+            f = self.select_all.font()
+            f.setPointSizeF(f.pointSizeF() * 1.2)
+            self.select_all.setFont(f)
+            self.select_all.setStyleSheet(
+                "QCheckBox::indicator { width: 19px; height: 19px; }")
+            self.select_all.clicked.connect(self._select_page)
+            self.sel_label = QLabel("")
+            self.delete_btn = QPushButton("Delete")
+            self.delete_btn.setProperty("danger", True)
+            self.delete_btn.clicked.connect(self._delete_clicked)
+            self.clear_sel_btn = QPushButton("Clear selection")
+            self.clear_sel_btn.setProperty("ghost", True)
+            self.clear_sel_btn.clicked.connect(self._clear_selection)
+            sel.addWidget(self.select_all)
+            sel.addWidget(self.sel_label)
+            sel.addWidget(self.delete_btn)
+            sel.addWidget(self.clear_sel_btn)
+            sel.addStretch(1)
+            lay.addLayout(sel)
+
+            self.table = QTableWidget(0, 6)
             self.table.setHorizontalHeaderLabels(
-                ["Date & Time", "Package", "Top Findings", "Severity", ""])
+                ["", "Date & Time", "Package", "Top Findings", "Severity", ""])
             self.table.verticalHeader().setVisible(False)
             self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
             self.table.setSelectionMode(QAbstractItemView.NoSelection)
@@ -250,7 +295,8 @@ def make_history_page(palette: dict, on_open: Callable[[str], None],
             hh = self.table.horizontalHeader()
             hh.setSectionsClickable(True)
             hh.setStretchLastSection(False)
-            for col, mode in enumerate((QHeaderView.ResizeToContents, QHeaderView.Stretch,
+            for col, mode in enumerate((QHeaderView.ResizeToContents,
+                                        QHeaderView.ResizeToContents, QHeaderView.Stretch,
                                         QHeaderView.ResizeToContents,
                                         QHeaderView.ResizeToContents,
                                         QHeaderView.ResizeToContents)):
@@ -313,7 +359,7 @@ def make_history_page(palette: dict, on_open: Callable[[str], None],
             fill = palette.get("surface_alt", "#1e293b")
             for r, rid in enumerate(self._row_ids):
                 on = rid == self._opening_id
-                for c in range(5):
+                for c in range(1, 6):
                     w = self.table.cellWidget(r, c)
                     if w is None:
                         continue
@@ -329,8 +375,58 @@ def make_history_page(palette: dict, on_open: Callable[[str], None],
         def set_scans(self, scans: list, error: Optional[str] = None,
                       limit: Optional[int] = None) -> None:
             self._scans = list(scans)
+            self._selected = prune_selection(self._selected, self._scans)
             self._error, self._limit = error, limit
             self._redraw()
+
+        def clear_selection(self) -> None:
+            self._clear_selection()
+
+        # -- selection ------------------------------------------------------ #
+
+        def _refresh_selection_ui(self) -> None:
+            n = len(self._selected)
+            self.sel_label.setText(f"{n} selected")
+            for w in (self.sel_label, self.delete_btn, self.clear_sel_btn):
+                w.setVisible(n > 0)
+            self.delete_btn.setText(f"Delete {n}")
+            on_page = bool(self._row_ids) and all(i in self._selected for i in self._row_ids)
+            self.select_all.blockSignals(True)
+            self.select_all.setChecked(on_page)
+            self.select_all.blockSignals(False)
+
+        def _row_toggled(self, scan_id: str, on: bool) -> None:
+            self._selected = toggle_selection(self._selected, scan_id, on)
+            self._refresh_selection_ui()
+
+        def _select_page(self, on: bool) -> None:
+            for i in self._row_ids:
+                self._selected = toggle_selection(self._selected, i, on)
+            for r in range(self.table.rowCount()):
+                box = self._row_box(r)
+                if box is not None:
+                    box.blockSignals(True)
+                    box.setChecked(on)
+                    box.blockSignals(False)
+            self._refresh_selection_ui()
+
+        def _clear_selection(self) -> None:
+            self._selected = set()
+            for r in range(self.table.rowCount()):
+                box = self._row_box(r)
+                if box is not None:
+                    box.blockSignals(True)
+                    box.setChecked(False)
+                    box.blockSignals(False)
+            self._refresh_selection_ui()
+
+        def _row_box(self, row: int):
+            holder = self.table.cellWidget(row, 0)
+            return holder.findChild(QCheckBox) if holder is not None else None
+
+        def _delete_clicked(self) -> None:
+            if self._selected:
+                on_delete_selected(sorted(self._selected))
 
         # -- internals ------------------------------------------------------ #
 
@@ -343,7 +439,7 @@ def make_history_page(palette: dict, on_open: Callable[[str], None],
             self._redraw()
 
         def _header_clicked(self, col: int) -> None:
-            key = {0: "date", 1: "package", 3: "severity"}.get(col)
+            key = {1: "date", 2: "package", 4: "severity"}.get(col)
             if key is None:
                 return
             if key == self._sort_key:
@@ -362,6 +458,9 @@ def make_history_page(palette: dict, on_open: Callable[[str], None],
             self.prev_btn.setEnabled(False)
             self.next_btn.setEnabled(False)
             self.clear_btn.setVisible(False)
+            self._row_ids = []
+            self.select_all.setVisible(False)
+            self._refresh_selection_ui()
 
         def _redraw(self) -> None:
             if self._error:
@@ -385,6 +484,7 @@ def make_history_page(palette: dict, on_open: Callable[[str], None],
 
             self.message.setVisible(False)
             self.table.setVisible(True)
+            self.select_all.setVisible(True)
             self.clear_btn.setVisible(True)
             ordered = sort_scans(matches, self._sort_key, self._sort_desc)
             rows, self._page, pages = page_of(ordered, self._page)
@@ -399,8 +499,8 @@ def make_history_page(palette: dict, on_open: Callable[[str], None],
             self.next_btn.setEnabled(self._page < pages - 1)
 
         def _cell_clicked(self, row: int, col: int) -> None:
-            # Column 4 holds the View Report button, which opens on its own.
-            if col != 4 and 0 <= row < len(self._row_ids):
+            # Column 0 is the checkbox and column 5 the View Report button; both act alone.
+            if col not in (0, 5) and 0 <= row < len(self._row_ids):
                 on_open(self._row_ids[row])
 
         def _cell(self, row: int, col: int, html: str) -> None:
@@ -418,12 +518,21 @@ def make_history_page(palette: dict, on_open: Callable[[str], None],
                 target = scan.get("target") or {}
                 counts = scan.get("counts") or {}
                 when = scan.get("createdAt")
-                self._cell(r, 0, f"<div style='color:{text_colour}'>{_esc(format_when(when))}"
+                box = QCheckBox()
+                box.setChecked(scan["id"] in self._selected)
+                box.toggled.connect(lambda on, i=scan["id"]: self._row_toggled(i, on))
+                cb_holder = QWidget()
+                cbl = QHBoxLayout(cb_holder)
+                cbl.setContentsMargins(12, 0, 4, 0)
+                cbl.addWidget(box)
+                self.table.setCellWidget(r, 0, cb_holder)
+
+                self._cell(r, 1, f"<div style='color:{text_colour}'>{_esc(format_when(when))}"
                                  f"</div><div style='color:{muted}'>{_esc(relative_when(when))}</div>")
-                self._cell(r, 1, f"<div style='color:{text_colour}'><b>{_esc(package_of(scan))}"
+                self._cell(r, 2, f"<div style='color:{text_colour}'><b>{_esc(package_of(scan))}"
                                  f"</b></div><div style='color:{muted}'>"
                                  f"{_esc(target.get('appVersion') or '-')}</div>")
-                self._cell(r, 2, _findings_html(counts, muted))
+                self._cell(r, 3, _findings_html(counts, muted))
 
                 name = worst_severity(counts)
                 badge = QLabel(name.capitalize())
@@ -440,7 +549,7 @@ def make_history_page(palette: dict, on_open: Callable[[str], None],
                 hl.setContentsMargins(8, 0, 8, 0)
                 hl.addWidget(badge)
                 holder.setAttribute(Qt.WA_TransparentForMouseEvents)
-                self.table.setCellWidget(r, 3, holder)
+                self.table.setCellWidget(r, 4, holder)
 
                 btn = QPushButton("View Report")
                 btn.setProperty("ghost", True)
@@ -449,8 +558,9 @@ def make_history_page(palette: dict, on_open: Callable[[str], None],
                 hl2 = QHBoxLayout(holder2)
                 hl2.setContentsMargins(8, 0, 8, 0)
                 hl2.addWidget(btn)
-                self.table.setCellWidget(r, 4, holder2)
+                self.table.setCellWidget(r, 5, holder2)
             self._paint_opening()
+            self._refresh_selection_ui()
 
     return HistoryPage()
 

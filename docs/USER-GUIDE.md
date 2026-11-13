@@ -167,6 +167,11 @@ Findings from reading code are marked **"likely"** and dialled back one level, b
 compiled code cannot be read with total certainty. Findings from probing the live app are
 **"confirmed"** — the tool watched it happen.
 
+Above the report is a row of severity buttons, one for each severity the run actually
+found (for example `2 High`, `5 Low`). Click one to jump to the first finding of that severity. Nothing is hidden. The
+severity chips at the top of the report itself do the same. Exported reports always
+contain every finding.
+
 ### Getting a plain-language explanation
 
 Turn on **Get AI explanations**, beside the Run button, before you start. Once the run is
@@ -202,6 +207,12 @@ from other computers, since the account is the only place they live.
 - Pick a run from the dropdown to see its full findings again
 - **Reload** re-fetches from the server
 - **Delete this run** / **Clear all history** remove them permanently from your account
+- To delete several runs, tick the box at the start of each row (or the box in the header
+  to select every run on the page). A bar shows how many are selected, with **Delete** and
+  **Clear selection**. Selection is kept while you page, sort or filter.
+- Deleting asks you to type a random code shown in the dialog (for example `DELETE-7K3Q`)
+  before the Delete button turns on. The code changes every time. This also applies to
+  **Clear all history**.
 - **Compare two runs…** (team accounts, once you have two saved runs) shows what got fixed,
   what is new, and what is unchanged between two runs of the same app. Findings are matched
   by category and component, so a genuine fix shows as resolved even though each run
